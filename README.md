@@ -67,7 +67,7 @@ You only do this once per computer. It's Windows-first; Mac/Linux work too, see 
 
    ```
    Project Tracker/
-       Master.xlsx              key dates + the All Parts rollup
+       Master.xlsx              key dates + the All Parts / All Actions rollups
        Subteams/
            Aero.xlsx
            Chassis & Controls.xlsx
@@ -114,30 +114,46 @@ Files you can only view are synced **read-only**, so the app shows them as **Vie
 ### Everyone
 
 * **Overview** shows:
-  * one card per subteam (progress, plus how many parts are late, flagged or due soon);
-  * **Needs attention**: every late, *At risk* or *Blocked* part;
-  * **Next 14 days**: gates and key dates coming up;
+  * one card per subteam (progress, open actions, plus how many parts are late, flagged or due soon);
+  * **Needs attention**: late, *At risk* or *Blocked* parts; overdue actions; and key dates that are overdue or due within 7 days;
+  * **Next 14 days**: gates, actions and key dates coming up;
   * the **next design review**, in the subtitle.
-* **Subteam tabs** (left rail) list that subteam's parts, sorted with problems first. The dots show gate
-  progress: filled = passed, ringed = current. Click a part to see its details.
-* **Key dates** lists competition deadlines, design reviews (gate meetings) and milestones. Turn on *Show past* to see older ones.
+* **My work**: pick your name once (it's remembered) to see **your parts, your open actions and the key dates you're
+  responsible for**, with anything late at the top. Key dates you're named on carry a **You** tag everywhere in the app.
+* **Subteam tabs** (left rail) show:
+  * the subteam's parts, sorted with problems first. The dots show gate progress: filled = passed, ringed = current.
+    Use the filter box to search by part, owner or note. Click a part to see its details and **gate history**;
+  * its **actions**, open ones first;
+  * how many gates it has passed **on time**, in the subtitle.
+* **Key dates** lists competition deadlines, design reviews (gate meetings) and milestones, with the people responsible for each.
+  Overdue ones stay visible until marked done. Turn on *Show past* to see the rest.
 * **↻** reloads the files (do this after a lead says they've updated). **☾** switches between light and dark mode.
 
 ### Subteam leads (your tab shows "You can edit")
 
 * **Add part** (bottom-right button): give it a name and owner, then fill in a **due date for each gate**.
 * **Click a part** to edit it:
-  * **Gate passed** moves the part to its next gate (after the last gate it becomes *Done*);
+  * **Gate passed** moves the part to its next gate (after the last gate it becomes *Done*). When you save, the app
+    records the date the gate was passed in the part's **gate history** and works out whether it was early or late.
+    Moving a part back un-records those gates;
   * **Flag** marks the part as *At risk* or *Blocked*. It then appears under *Needs attention*, so raise it at the next meeting;
   * **Notes** is a one-line reason, e.g. "waiting on supplier".
-* **Weekly habit:** before the leads meeting, update each part's current gate, dates and flag. It takes about 5 minutes.
+* **Actions** (follow-ups from design reviews):
+  * *Add action* on your subteam page. Give each action one owner, a due date, the part it relates to, and where it came from (e.g. "DR2");
+  * tick the box when it's done. Overdue actions show under *Needs attention*, and the owner sees them under *My work*.
+* **Weekly habit:** before the leads meeting, update each part's current gate, dates and flag, and tick off finished actions. It takes about 5 minutes.
 
 ### PM / captain
 
-* **Key dates:** add, edit or delete entries. Use the *Design Review* type for gate meetings (e.g. "DR2: Aero + Suspension").
-* **`Master.xlsx > All Parts`** is rebuilt automatically whenever someone with edit access to the master saves anything.
-  It lets people without the app see everything in the browser. Don't edit that sheet by hand.
-* **In the meeting**, go through *Needs attention* first, then *Next 14 days*.
+* **Key dates:** add, edit or delete entries.
+  * Use the *Design Review* type for gate meetings (e.g. "DR2: Aero + Suspension").
+  * Fill in **People responsible** (comma-separated names, spelt the same way as in the subteam files, e.g. "Sam Lee, Alex Kim").
+    They'll see the date in *My work*, and it shows under *Needs attention* from 7 days before.
+  * Tick **Done** once a deadline is submitted or a milestone met. Until then, a past deadline shows as **late**.
+    Design reviews don't need ticking; once the date has passed they count as held.
+* **`Master.xlsx > All Parts` and `All Actions`** are rebuilt automatically whenever someone with edit access to the master saves anything.
+  They let people without the app see everything in the browser. Don't edit those sheets by hand.
+* **In the meeting**, go through *Needs attention* first, then *Next 14 days*. Record each review's follow-ups as actions straight away.
 
 ---
 
@@ -158,11 +174,27 @@ Each part has a **current gate**, the gate it's working towards. Every gate to i
 * **At risk**: might slip; discuss it.
 * **Blocked**: can't progress without help.
 
+**Actions and key dates** follow the same Late / Due soon / On track rules, based on their own due date.
+* An action is *Done* once it's ticked.
+* A deadline or milestone is *Done* once the PM ticks it.
+* A design review that has happened shows as *Held*.
+
+**On time** (subteam subtitle) counts the gates passed on or before their due date, out of all gates passed that had a due date.
+
 ---
 
 ## 6. Editing in Excel instead
 
-Leads can also edit their file directly in Excel (desktop or browser). Each file has one sheet, **Plan**:
+Leads can also edit their file directly in Excel (desktop or browser). Each subteam file has three sheets:
+
+* **Plan**: the parts (below). This is the one you'd normally edit.
+* **Actions**: `Action | Part | Owner | Due | From | Closed`. A row is done once *Closed* has a date.
+* **Gate Log**: `Part | Gate | Due | Passed`. The app fills this in when a gate is passed, so there's no need to edit it.
+  Changing *Current Gate* directly in Excel does **not** add to the log; use the app for that.
+
+The master's **Key Dates** sheet is `Date | Event | Type | People | Done`.
+
+The **Plan** sheet looks like this:
 
 | Part | Owner | Current Gate | Flag | Notes | Concept | Detailed Design | Drawings | Manufacturing | Testing |
 |---|---|---|---|---|---|---|---|---|---|

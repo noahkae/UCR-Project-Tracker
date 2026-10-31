@@ -3,17 +3,23 @@
 Folder layout (a SharePoint library, synced to each PC with OneDrive):
 
     Project Tracker/
-        Master.xlsx            PM/captain edits Key Dates; the app rewrites All Parts
+        Master.xlsx            PM/captain edits Key Dates; the app rewrites All Parts / All Actions
         Subteams/
-            Aero.xlsx          only the Aero lead can edit - one sheet, "Plan"
+            Aero.xlsx          only the Aero lead can edit
             Suspension.xlsx
             ...
+
+A subteam file has three sheets:
+    Plan       one row per part: owner, current gate, flag, notes, a due date per gate
+    Actions    follow-ups from design reviews: action, part, owner, due, from, closed
+    Gate Log   written by the app when a gate is passed: part, gate, due, passed
 
 Permissions are SharePoint's: a file you can't edit syncs as read-only, and the
 app treats it as view-only.
 """
 
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -27,11 +33,15 @@ from openpyxl.worksheet.datavalidation import DataValidation
 MASTER = "Master.xlsx"
 SUBTEAM_DIR = "Subteams"
 PLAN_SHEET = "Plan"
+ACTION_SHEET = "Actions"
+LOG_SHEET = "Gate Log"
 FIXED_COLS = ["Part", "Owner", "Current Gate", "Flag", "Notes"]
+ACTION_COLS = ["Action", "Part", "Owner", "Due", "From", "Closed"]
+LOG_COLS = ["Part", "Gate", "Due", "Passed"]
 DEFAULT_GATES = ["Concept", "Detailed Design", "Drawings", "Manufacturing", "Testing"]
 FLAGS = ["OK", "At risk", "Blocked"]
 DONE = "Done"
-KEY_DATE_COLS = ["Date", "Event", "Type"]
+KEY_DATE_COLS = ["Date", "Event", "Type", "People", "Done"]
 KEY_DATE_TYPES = ["Deadline", "Design Review", "Milestone"]
 ROLLUP_COLS = ["Subteam", "Part", "Owner", "Current Gate", "Due", "Status", "Flag", "Notes"]
 DUE_SOON_DAYS = 7
@@ -72,6 +82,24 @@ class Part:
 
 
 @dataclass
+class Action:
+    text: str = ""
+    part: str = ""
+    owner: str = ""
+    due: date = None
+    source: str = ""  # which review / meeting it came from, e.g. "DR2"
+    closed: date = None
+
+
+@dataclass
+class GatePass:
+    part: str
+    gate: str
+    due: date
+    passed: date
+
+
+@dataclass
 class Subteam:
     name: str
     path: Path
@@ -79,6 +107,8 @@ class Subteam:
     parts: list
     writable: bool
     mtime: float
+    actions: list = field(default_factory=list)
+    log: list = field(default_factory=list)
 
 
 @dataclass
@@ -86,6 +116,8 @@ class KeyDate:
     date: date = None
     event: str = ""
     type: str = "Deadline"
+    people: list = field(default_factory=list)
+    done: bool = False
 
 
 @dataclass
@@ -97,19 +129,14 @@ class Tracker:
     master_mtime: float
 
 
-def current_gate(part, gates):
-    if part.current == DONE or part.current in gates:
-        return part.current
-    return gates[0] if gates else DONE
+# --------------------------------------------------------------------------- rules
 
 
-def status(part, gates, today=None):
-    """Done / Late / Due soon / On track / No date - from the current gate's due date."""
+def date_status(due, done=False, today=None):
+    """Done / Late / Due soon / On track / No date."""
     today = today or date.today()
-    gate = current_gate(part, gates)
-    if gate == DONE:
+    if done:
         return DONE
-    due = part.dates.get(gate)
     if due is None:
         return "No date"
     if today > due:
@@ -119,9 +146,20 @@ def status(part, gates, today=None):
     return "On track"
 
 
+def current_gate(part, gates):
+    if part.current == DONE or part.current in gates:
+        return part.current
+    return gates[0] if gates else DONE
+
+
 def due_date(part, gates):
     gate = current_gate(part, gates)
     return None if gate == DONE else part.dates.get(gate)
+
+
+def status(part, gates, today=None):
+    """A part's status comes from its current gate's due date."""
+    return date_status(due_date(part, gates), current_gate(part, gates) == DONE, today)
 
 
 def needs_attention(part, gates, today=None):
@@ -132,6 +170,64 @@ def progress(part, gates):
     """(gates passed, gates in total)."""
     gate = current_gate(part, gates)
     return (len(gates) if gate == DONE else gates.index(gate)), len(gates)
+
+
+def action_status(action, today=None):
+    return date_status(action.due, action.closed is not None, today)
+
+
+def key_date_status(kd, today=None):
+    """Deadlines and milestones can be late; a design review is a meeting, so once it's past it's just held."""
+    today = today or date.today()
+    if kd.type == "Design Review" and kd.date and kd.date < today:
+        return "Held"
+    return date_status(kd.date, kd.done, today)
+
+
+def key_date_needs_attention(kd, today=None):
+    return key_date_status(kd, today) in ("Late", "Due soon")
+
+
+def split_names(text):
+    """'Sam, Alex & Jo' -> ['Sam', 'Alex', 'Jo']."""
+    return [n.strip() for n in re.split(r"[,;/&]| and ", text or "") if n.strip()]
+
+
+def is_me(name, me):
+    return bool(me) and name.strip().casefold() == me.strip().casefold()
+
+
+def on_time(team):
+    """(gates passed on or before their due date, gates passed that had a due date)."""
+    timed = [g for g in team.log if g.due]
+    return sum(1 for g in timed if g.passed <= g.due), len(timed)
+
+
+def record_part_change(team, old, new, today=None):
+    """Keep the Gate Log and Actions in step with an edited part.
+
+    Moving the current gate forward logs each gate passed today; moving it back
+    removes those log entries. Renaming a part renames it in the log and actions.
+    """
+    today = today or date.today()
+    if old is None:
+        return
+    if old.name != new.name:
+        for entry in team.log:
+            if entry.part == old.name:
+                entry.part = new.name
+        for action in team.actions:
+            if action.part == old.name:
+                action.part = new.name
+    index = lambda p: len(team.gates) if current_gate(p, team.gates) == DONE else team.gates.index(current_gate(p, team.gates))
+    before, after = index(old), index(new)
+    if after > before:
+        for gate in team.gates[before:after]:
+            team.log = [e for e in team.log if not (e.part == new.name and e.gate == gate)]
+            team.log.append(GatePass(new.name, gate, new.dates.get(gate), today))
+    elif after < before:
+        undone = set(team.gates[after:before])
+        team.log = [e for e in team.log if not (e.part == new.name and e.gate in undone)]
 
 
 # --------------------------------------------------------------------------- file checks
@@ -181,9 +277,11 @@ def load(folder):
     master = folder / MASTER
     ws = load_workbook(master, data_only=True)["Key Dates"]
     key_dates = []
-    for row in ws.iter_rows(min_row=2, max_col=3, values_only=True):
+    for row in ws.iter_rows(min_row=2, max_col=len(KEY_DATE_COLS), values_only=True):
+        row = list(row) + [None] * len(KEY_DATE_COLS)
         if row[1]:
-            key_dates.append(KeyDate(_date(row[0]), str(row[1]).strip(), str(row[2] or "Deadline").strip()))
+            key_dates.append(KeyDate(_date(row[0]), str(row[1]).strip(), str(row[2] or "Deadline").strip(),
+                                     split_names(str(row[3] or "")), _truthy(row[4])))
     teams = [load_subteam(p) for p in sorted((folder / SUBTEAM_DIR).glob("*.xlsx")) if not p.name.startswith("~$")]
     return Tracker(folder, key_dates, [t for t in teams if t], is_writable(master), master.stat().st_mtime)
 
@@ -213,7 +311,27 @@ def load_subteam(path):
             notes=str(row[4] or "").strip(),
             dates={g: _date(row[n + i]) for i, g in enumerate(gates)},
         ))
-    return Subteam(path.stem, path, gates, parts, is_writable(path), path.stat().st_mtime)
+    actions = [
+        Action(str(r[0]).strip(), _text(r[1]), _text(r[2]), _date(r[3]), _text(r[4]), _date(r[5]))
+        for r in _rows(wb, ACTION_SHEET, len(ACTION_COLS))
+    ]
+    log = [GatePass(str(r[0]).strip(), _text(r[1]), _date(r[2]), _date(r[3]))
+           for r in _rows(wb, LOG_SHEET, len(LOG_COLS)) if r[1] and _date(r[3])]
+    return Subteam(path.stem, path, gates, parts, is_writable(path), path.stat().st_mtime, actions, log)
+
+
+def _rows(wb, sheet, width):
+    if sheet not in wb.sheetnames:
+        return []
+    return [list(r) for r in wb[sheet].iter_rows(min_row=2, max_col=width, values_only=True) if r[0]]
+
+
+def _text(v):
+    return str(v).strip() if v is not None else ""
+
+
+def _truthy(v):
+    return isinstance(v, (date, datetime)) or str(v or "").strip().lower() in ("yes", "y", "x", "done", "true", "1")
 
 
 def _date(v):
@@ -240,10 +358,40 @@ def _header(ws, names, fills=None):
         c.alignment = Alignment(horizontal="center")
 
 
-def _list(ws, cells, values):
-    dv = DataValidation(type="list", formula1='"' + ",".join(values) + '"', allow_blank=True)
+def _list(ws, cells, values=None, source=None):
+    dv = DataValidation(type="list", formula1=source or ('"' + ",".join(values) + '"'), allow_blank=True)
     dv.add(cells)
     ws.add_data_validation(dv)
+
+
+def _ensure_side_sheets(wb):
+    """Add the Actions and Gate Log sheets to a subteam file that doesn't have them yet."""
+    if ACTION_SHEET not in wb.sheetnames:
+        ws = wb.create_sheet(ACTION_SHEET)
+        _header(ws, ACTION_COLS)
+        for col, width in zip("ABCDEF", (48, 24, 18, 12, 12, 12)):
+            ws.column_dimensions[col].width = width
+        _list(ws, f"B2:B{FORMAT_ROWS + 1}", source=f"={PLAN_SHEET}!$A$2:$A${FORMAT_ROWS + 1}")
+        ws.freeze_panes = "A2"
+    if LOG_SHEET not in wb.sheetnames:
+        ws = wb.create_sheet(LOG_SHEET)
+        _header(ws, LOG_COLS)
+        for col, width in zip("ABCD", (28, 18, 12, 12)):
+            ws.column_dimensions[col].width = width
+        ws["F1"] = "Written by the tracker app when a gate is passed."
+        ws["F1"].font = Font(italic=True, color="757575")
+        ws.freeze_panes = "A2"
+
+
+def _write_rows(ws, rows, width, date_cols):
+    for row in ws.iter_rows(min_row=2, max_row=max(ws.max_row, 2), max_col=width):
+        for c in row:
+            c.value = None
+    for r, values in enumerate(rows, 2):
+        for i, v in enumerate(values, 1):
+            c = ws.cell(r, i, v if v not in ("", None) else None)
+            if i in date_cols:
+                c.number_format = "yyyy-mm-dd"
 
 
 def create_subteam_file(path, gates=DEFAULT_GATES):
@@ -273,6 +421,7 @@ def create_subteam_file(path, gates=DEFAULT_GATES):
     _list(ws, f"C2:C{FORMAT_ROWS + 1}", gates + [DONE])
     _list(ws, f"D2:D{FORMAT_ROWS + 1}", FLAGS)
     ws.freeze_panes = "B2"
+    _ensure_side_sheets(wb)
     _save_atomic(wb, Path(path))
 
 
@@ -281,18 +430,21 @@ def create_master(path):
     ws = wb.active
     ws.title = "Key Dates"
     _header(ws, KEY_DATE_COLS)
-    for col, width in zip("ABC", (12, 50, 16)):
+    for col, width in zip("ABCDE", (12, 50, 16, 36, 8)):
         ws.column_dimensions[col].width = width
     for r in range(2, FORMAT_ROWS + 2):
         ws[f"A{r}"].number_format = "yyyy-mm-dd"
     _list(ws, f"C2:C{FORMAT_ROWS + 1}", KEY_DATE_TYPES)
+    _list(ws, f"E2:E{FORMAT_ROWS + 1}", ["Yes"])
     ws.freeze_panes = "A2"
     about = wb.create_sheet("Read Me")
     for line in [
         "Project Tracker: master file",
         "",
         "Key Dates: competition deadlines, design reviews (gate meetings) and milestones. Only the PM/captain edits this.",
-        "All Parts: rebuilt by the tracker app from the subteam files. Don't edit it here.",
+        "   People = who's responsible for meeting the date (comma-separated). They see it under 'My work' in the app.",
+        "   Done = Yes once a deadline is submitted or a milestone is met.",
+        "All Parts / All Actions: rebuilt by the tracker app from the subteam files. Don't edit them here.",
         "",
         "Each subteam's plan is in Subteams/<name>.xlsx, and only that subteam's lead can edit it.",
         "In a subteam file, the gates are the columns after Notes, in order, and each holds that gate's due date.",
@@ -306,20 +458,19 @@ def create_master(path):
 
 
 def save_subteam(team):
-    """Write team.parts back to its file. Raises a SaveError subclass if it can't."""
+    """Write the parts, actions and gate log back to the file. Raises a SaveError subclass if it can't."""
     ensure_can_save(team.path, team.mtime)
     wb = load_workbook(team.path)
-    ws = wb[PLAN_SHEET]
-    width = len(FIXED_COLS) + len(team.gates)
-    for row in ws.iter_rows(min_row=2, max_row=max(ws.max_row, 2), max_col=width):
-        for c in row:
-            c.value = None
-    for r, p in enumerate(team.parts, 2):
-        values = [p.name, p.owner or None, p.current or None, p.flag, p.notes or None] + [p.dates.get(g) for g in team.gates]
-        for i, v in enumerate(values, 1):
-            c = ws.cell(r, i, v)
-            if i > len(FIXED_COLS):
-                c.number_format = "yyyy-mm-dd"
+    _ensure_side_sheets(wb)
+    _write_rows(
+        wb[PLAN_SHEET],
+        [[p.name, p.owner, p.current, p.flag, p.notes] + [p.dates.get(g) for g in team.gates] for p in team.parts],
+        len(FIXED_COLS) + len(team.gates),
+        set(range(len(FIXED_COLS) + 1, len(FIXED_COLS) + len(team.gates) + 1)),
+    )
+    _write_rows(wb[ACTION_SHEET], [[a.text, a.part, a.owner, a.due, a.source, a.closed] for a in team.actions],
+                len(ACTION_COLS), {4, 6})
+    _write_rows(wb[LOG_SHEET], [[g.part, g.gate, g.due, g.passed] for g in team.log], len(LOG_COLS), {3, 4})
     _save_atomic(wb, team.path)
     team.mtime = team.path.stat().st_mtime
 
@@ -329,36 +480,39 @@ def save_key_dates(tracker):
     ensure_can_save(path, tracker.master_mtime)
     wb = load_workbook(path)
     ws = wb["Key Dates"]
-    for row in ws.iter_rows(min_row=2, max_row=max(ws.max_row, 2), max_col=3):
-        for c in row:
-            c.value = None
-    for r, kd in enumerate(sorted(tracker.key_dates, key=lambda k: k.date or date.max), 2):
-        ws.cell(r, 1, kd.date).number_format = "yyyy-mm-dd"
-        ws.cell(r, 2, kd.event)
-        ws.cell(r, 3, kd.type)
+    _header(ws, KEY_DATE_COLS)  # also upgrades a master made before People / Done existed
+    ws.column_dimensions["D"].width = 36
+    _write_rows(ws, [[k.date, k.event, k.type, ", ".join(k.people), "Yes" if k.done else None]
+                     for k in sorted(tracker.key_dates, key=lambda k: k.date or date.max)],
+                len(KEY_DATE_COLS), {1})
     _save_atomic(wb, path)
     tracker.master_mtime = path.stat().st_mtime
 
 
 def write_rollup(tracker, today=None):
-    """Regenerate Master.xlsx > All Parts from every subteam file."""
+    """Regenerate Master.xlsx > All Parts and All Actions from every subteam file."""
     path = tracker.folder / MASTER
     ensure_can_save(path)  # regenerated from scratch, so a newer master isn't a conflict
     wb = load_workbook(path)
-    if "All Parts" in wb.sheetnames:
-        del wb["All Parts"]
-    ws = wb.create_sheet("All Parts", 1)
-    _header(ws, ROLLUP_COLS)
-    for team in tracker.subteams:
-        for p in team.parts:
-            ws.append([team.name, p.name, p.owner or None, current_gate(p, team.gates), due_date(p, team.gates),
-                       status(p, team.gates, today), p.flag, p.notes or None])
-    for row in ws.iter_rows(min_row=2, min_col=5, max_col=5):
-        row[0].number_format = "yyyy-mm-dd"
-    for col, width in zip("ABCDEFGH", (24, 28, 18, 16, 11, 10, 9, 40)):
-        ws.column_dimensions[col].width = width
-    ws.cell(1, len(ROLLUP_COLS) + 2, f"Generated by the tracker app {datetime.now():%Y-%m-%d %H:%M}. Don't edit it here.").font = Font(italic=True, color="757575")
-    ws.freeze_panes = "A2"
-    ws.auto_filter.ref = f"A1:H{max(ws.max_row, 2)}"
+    stamp = f"Generated by the tracker app {datetime.now():%Y-%m-%d %H:%M}. Don't edit it here."
+    sheets = [
+        ("All Parts", ROLLUP_COLS, (24, 28, 18, 16, 11, 10, 9, 40), {5},
+         [[t.name, p.name, p.owner, current_gate(p, t.gates), due_date(p, t.gates), status(p, t.gates, today), p.flag, p.notes]
+          for t in tracker.subteams for p in t.parts]),
+        ("All Actions", ["Subteam"] + ACTION_COLS + ["Status"], (24, 48, 24, 18, 11, 10, 11, 10), {5, 7},
+         [[t.name, a.text, a.part, a.owner, a.due, a.source, a.closed, action_status(a, today)]
+          for t in tracker.subteams for a in t.actions]),
+    ]
+    for i, (name, cols, widths, date_cols, rows) in enumerate(sheets, 1):
+        if name in wb.sheetnames:
+            del wb[name]
+        ws = wb.create_sheet(name, i)
+        _header(ws, cols)
+        _write_rows(ws, rows, len(cols), date_cols)
+        for c, width in enumerate(widths, 1):
+            ws.column_dimensions[get_column_letter(c)].width = width
+        ws.cell(1, len(cols) + 2, stamp).font = Font(italic=True, color="757575")
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(cols))}{max(ws.max_row, 2)}"
     _save_atomic(wb, path)
     tracker.master_mtime = path.stat().st_mtime
