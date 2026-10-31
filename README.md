@@ -81,7 +81,7 @@ You only do this once per computer. It's Windows-first; Mac/Linux work too, see 
 
    Options:
    * `--subteams Aero Suspension ...` picks your own subteam list.
-   * `--gates Concept "Detailed Design" ...` picks your own gate list (in order).
+   * `--gates "DR01 - Concept" "DR02 - Detailed Design" ...` picks your own gate list (in order).
 
    The script refuses to overwrite an existing tracker.
 
@@ -245,19 +245,20 @@ The master's **Key Dates** sheet is `Date | Event | Type | People | Done`.
 
 The **Plan** sheet looks like this:
 
-| Part | Owner | Current Gate | Flag | Notes | Concept | Detailed Design | Drawings | Manufacturing | Testing |
+| Part | Owner | Current Gate | Flag | Notes | DR01 - Concept | DR02 - Detailed Design | DR03 - Final Design | Manufacturing | Testing |
 |---|---|---|---|---|---|---|---|---|---|
-| Front Wing | Sam | Detailed Design | OK | | 2026-10-11 | 2026-10-28 | 2026-11-10 | 2026-11-30 | 2026-12-20 |
+| Front Wing | Sam | DR02 - Detailed Design | OK | | 2026-10-11 | 2026-10-28 | 2026-11-10 | 2026-11-30 | 2026-12-20 |
 
 * *Current Gate* and *Flag* are dropdowns.
 * The gate columns hold due dates. Excel greys out passed gates, highlights the current one, and turns it red when overdue.
-* **Close the file in Excel before saving from the app.** The app tells you if it's still open.
 
 ---
 
 ## 7. Customising
 
 * **Rename or add gates for a subteam:** edit the header cells after *Notes* in that subteam's file. The app reads the gates from the headers, in order.
+  Files made with the original gates (*Concept*, *Detailed Design*, *Drawings*) show the DR01–DR03 names, and are
+  updated to them the next time that subteam saves from the app.
 * **Add a subteam:** copy any subteam file in `Subteams/`, rename it (e.g. `Cooling.xlsx`) and clear its rows. Then add its emoji to `SUBTEAM_EMOJI` in `tracker_app.py`; it shows 🔧 otherwise.
 * **Remove a subteam:** delete or move its file out of `Subteams/`.
 * **Change the "due soon" window:** `DUE_SOON_DAYS` in `tracker_core.py`.

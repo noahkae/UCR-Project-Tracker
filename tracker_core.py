@@ -41,7 +41,9 @@ LOG_SHEET = "Gate Log"
 FIXED_COLS = ["Part", "Owner", "Current Gate", "Flag", "Notes"]
 ACTION_COLS = ["Action", "Part", "Owner", "Due", "From", "Closed"]
 LOG_COLS = ["Part", "Gate", "Due", "Passed"]
-DEFAULT_GATES = ["Concept", "Detailed Design", "Drawings", "Manufacturing", "Testing"]
+DEFAULT_GATES = ["DR01 - Concept", "DR02 - Detailed Design", "DR03 - Final Design", "Manufacturing", "Testing"]
+# Files made with the original default gates are shown with the new names, and rewritten with them on the next save.
+OLD_DEFAULT_GATES = ["Concept", "Detailed Design", "Drawings", "Manufacturing", "Testing"]
 FLAGS = ["OK", "At risk", "Blocked"]
 DONE = "Done"
 KEY_DATE_COLS = ["Date", "Event", "Type", "People", "Done"]
@@ -354,6 +356,8 @@ def load_subteam(path):
         if not h:
             break
         gates.append(h)
+    renamed = dict(zip(OLD_DEFAULT_GATES, DEFAULT_GATES)) if gates == OLD_DEFAULT_GATES else {}
+    gates = [renamed.get(g, g) for g in gates]
     parts = []
     n = len(FIXED_COLS)
     for row in ws.iter_rows(min_row=2, max_col=n + len(gates), values_only=True):
@@ -363,7 +367,7 @@ def load_subteam(path):
         parts.append(Part(
             name=str(row[0]).strip(),
             owner=str(row[1] or "").strip(),
-            current=str(row[2] or "").strip(),
+            current=renamed.get(str(row[2] or "").strip(), str(row[2] or "").strip()),
             flag=flag if flag in FLAGS else "OK",
             notes=str(row[4] or "").strip(),
             dates={g: _date(row[n + i]) for i, g in enumerate(gates)},
@@ -372,7 +376,7 @@ def load_subteam(path):
         Action(str(r[0]).strip(), _text(r[1]), _text(r[2]), _date(r[3]), _text(r[4]), _date(r[5]))
         for r in _rows(wb, ACTION_SHEET, len(ACTION_COLS))
     ]
-    log = [GatePass(str(r[0]).strip(), _text(r[1]), _date(r[2]), _date(r[3]))
+    log = [GatePass(str(r[0]).strip(), renamed.get(_text(r[1]), _text(r[1])), _date(r[2]), _date(r[3]))
            for r in _rows(wb, LOG_SHEET, len(LOG_COLS)) if r[1] and _date(r[3])]
     return Subteam(path.stem, path, gates, parts, is_writable(path), path.stat().st_mtime, actions, log)
 
@@ -451,6 +455,19 @@ def _write_rows(ws, rows, width, date_cols):
                 c.number_format = "yyyy-mm-dd"
 
 
+def _sync_gate_headers(ws, gates):
+    """Write the gate names into the header row (upgrades files with the old default gates)."""
+    n = len(FIXED_COLS)
+    if [ws.cell(1, n + 1 + i).value for i in range(len(gates))] == gates:
+        return
+    for i, g in enumerate(gates):
+        ws.cell(1, n + 1 + i).value = g
+        ws.column_dimensions[get_column_letter(n + 1 + i)].width = max(15, len(g) + 4)
+    for dv in ws.data_validations.dataValidation:
+        if "C2:" in str(dv.sqref):  # the Current Gate dropdown
+            dv.formula1 = '"' + ",".join(gates + [DONE]) + '"'
+
+
 def create_subteam_file(path, gates=DEFAULT_GATES):
     """An empty subteam plan with headers, dropdowns and highlighting."""
     wb = Workbook()
@@ -463,7 +480,7 @@ def create_subteam_file(path, gates=DEFAULT_GATES):
     first, last = get_column_letter(n + 1), get_column_letter(n + len(gates))
     for i in range(len(gates)):
         letter = get_column_letter(n + 1 + i)
-        ws.column_dimensions[letter].width = 15
+        ws.column_dimensions[letter].width = max(15, len(gates[i]) + 4)
         for r in range(2, FORMAT_ROWS + 2):
             ws[f"{letter}{r}"].number_format = "yyyy-mm-dd"
     area = f"{first}2:{last}{FORMAT_ROWS + 1}"
@@ -519,6 +536,7 @@ def save_subteam(team):
     ensure_can_save(team.path, team.mtime)
     wb = load_workbook(team.path)
     _ensure_side_sheets(wb)
+    _sync_gate_headers(wb[PLAN_SHEET], team.gates)
     _write_rows(
         wb[PLAN_SHEET],
         [[p.name, p.owner, p.current, p.flag, p.notes] + [p.dates.get(g) for g in team.gates] for p in team.parts],
