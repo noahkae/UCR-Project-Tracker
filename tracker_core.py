@@ -18,6 +18,7 @@ Permissions are SharePoint's: a file you can't edit syncs as read-only, and the
 app treats it as view-only.
 """
 
+import json
 import os
 import re
 from dataclasses import dataclass, field
@@ -46,6 +47,8 @@ KEY_DATE_TYPES = ["Deadline", "Design Review", "Milestone"]
 ROLLUP_COLS = ["Subteam", "Part", "Owner", "Current Gate", "Due", "Status", "Flag", "Notes"]
 DUE_SOON_DAYS = 7
 FORMAT_ROWS = 300  # rows that get dropdowns / highlighting in the Excel files
+
+CONFIG = Path(os.environ.get("APPDATA", Path.home())) / "FSAETracker" / "config.json"  # per-user app settings
 
 HEADER_FONT = Font(bold=True, color="FFFFFF")
 HEADER_FILL = PatternFill("solid", fgColor="3F51B5")  # Material indigo 500
@@ -258,6 +261,27 @@ def _save_atomic(wb, path):
 
 
 # --------------------------------------------------------------------------- loading
+
+
+def load_config():
+    try:
+        return json.loads(CONFIG.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_config(cfg):
+    CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG.write_text(json.dumps(cfg))
+
+
+def default_folder():
+    """The tracker folder the app last used, or one found under OneDrive."""
+    folder = load_config().get("folder")
+    if folder and (Path(folder) / MASTER).exists():
+        return Path(folder)
+    return find_folder()
+
 
 
 def find_folder():

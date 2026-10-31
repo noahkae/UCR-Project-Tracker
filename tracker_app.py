@@ -11,8 +11,6 @@ are synced read-only, and the app shows them as view-only.
 import argparse
 import copy
 import ctypes
-import json
-import os
 import sys
 import threading
 import time
@@ -22,11 +20,11 @@ from pathlib import Path
 import flet as ft
 
 import tracker_core as core
+from tracker_core import load_config, save_config
 
-CONFIG = Path(os.environ.get("APPDATA", Path.home())) / "FSAETracker" / "config.json"
 ASSETS = Path(__file__).resolve().parent / "assets"
 LOOK_AHEAD_DAYS = 14
-FIXED_VIEWS = ["overview", "mywork", "keydates"]
+FIXED_VIEWS = ["overview", "mywork", "calendar", "keydates"]
 SUBTEAM_EMOJI = {  # matched against the start of the subteam's file name
     "aero": "🪽", "suspension": "🛞", "chassis": "🏎️", "powertrain": "🔋",
     "electrical": "⚡", "driverless": "🤖",
@@ -43,19 +41,11 @@ STATUS_COLOURS = {  # status -> (container colour, text colour)
     "Blocked": (ft.Colors.ERROR_CONTAINER, ft.Colors.ON_ERROR_CONTAINER),
     "You": (ft.Colors.PRIMARY_CONTAINER, ft.Colors.ON_PRIMARY_CONTAINER),
 }
+CALENDAR_COLOURS = {  # calendar-only keys: gates still to come, and upcoming design reviews
+    "Future": (ft.Colors.SECONDARY_CONTAINER, ft.Colors.ON_SECONDARY_CONTAINER),
+    "Review": (ft.Colors.TERTIARY_CONTAINER, ft.Colors.ON_TERTIARY_CONTAINER),
+}
 TYPE_ICONS = {"Deadline": ft.Icons.FLAG_OUTLINED, "Design Review": ft.Icons.GROUPS_OUTLINED, "Milestone": ft.Icons.EMOJI_EVENTS_OUTLINED}
-
-
-def load_config():
-    try:
-        return json.loads(CONFIG.read_text())
-    except (OSError, ValueError):
-        return {}
-
-
-def save_config(cfg):
-    CONFIG.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG.write_text(json.dumps(cfg))
 
 
 def fmt(d):
@@ -137,6 +127,7 @@ class TrackerApp:
         self.tracker = None
         self.view = "overview"
         self.me = load_config().get("me", "")
+        self.cal_month = date.today().replace(day=1)
         self.rail = ft.NavigationRail(
             label_type=ft.NavigationRailLabelType.ALL, min_width=96, group_alignment=-0.9, scrollable=True, on_change=self.on_nav,
             trailing=ft.Column([
@@ -159,6 +150,7 @@ class TrackerApp:
         self.rail.destinations = [
             ft.NavigationRailDestination(icon=ft.Icons.DASHBOARD_OUTLINED, selected_icon=ft.Icons.DASHBOARD, label="Overview"),
             ft.NavigationRailDestination(icon=ft.Icons.PERSON_OUTLINE, selected_icon=ft.Icons.PERSON, label="My work"),
+            ft.NavigationRailDestination(icon=ft.Icons.CALENDAR_MONTH_OUTLINED, selected_icon=ft.Icons.CALENDAR_MONTH, label="Calendar"),
             ft.NavigationRailDestination(icon=ft.Icons.EVENT_OUTLINED, selected_icon=ft.Icons.EVENT, label="Key dates"),
         ] + [
             ft.NavigationRailDestination(icon=ft.Text(emoji(t.name), size=22), label=_short(t.name))
@@ -200,7 +192,8 @@ class TrackerApp:
         self.view = view
         if view in FIXED_VIEWS:
             index = FIXED_VIEWS.index(view)
-            content = {"overview": self.overview, "mywork": self.my_work, "keydates": self.key_dates_view}[view]()
+            content = {"overview": self.overview, "mywork": self.my_work, "calendar": self.calendar_view,
+                       "keydates": self.key_dates_view}[view]()
         else:
             index = [t.name for t in self.tracker.subteams].index(view) + len(FIXED_VIEWS)
             content = self.subteam_view(self.team(view))
@@ -387,6 +380,124 @@ class TrackerApp:
             section(f"My actions ({len(actions)})", ft.Column([self.action_tile(t, a, today) for t, a in actions]) if actions else empty("No open actions.")),
             section(f"My key dates ({len(dates)})", ft.Column([self.key_date_tile(k, today) for k in dates]) if dates else empty("No upcoming key dates.")),
         ], spacing=20, scroll=ft.ScrollMode.AUTO), None
+
+    # ---- calendar
+
+    def calendar_events(self, hidden):
+        """date -> [(sort key, label, colour key, on_click)] for everything not toggled off."""
+        today = date.today()
+        events = {}
+
+        def add(d, order, label, key, click):
+            if d:
+                events.setdefault(d, []).append((order, label, key, click))
+
+        for t in self.tracker.subteams:
+            if t.name in hidden:
+                continue
+            for pi, p in enumerate(t.parts):
+                passed, _ = core.progress(p, t.gates)
+                current = core.current_gate(p, t.gates)
+                for gi, g in enumerate(t.gates):
+                    key = "Done" if gi < passed else (core.status(p, t.gates, today) if g == current else "Future")
+                    add(p.dates.get(g), 1, f"{emoji(t.name)} {p.name}: {g}", key, lambda e, t=t, i=pi: self.edit_part(t, i))
+            if "Actions" not in hidden:
+                for ai, a in enumerate(t.actions):
+                    add(a.due, 2, f"{'☑' if a.closed else '☐'} {a.text}", core.action_status(a, today),
+                        lambda e, t=t, i=ai: self.edit_action(t, i))
+        if "Key dates" not in hidden:
+            for ki, k in enumerate(self.tracker.key_dates):
+                st = core.key_date_status(k, today)
+                click = (lambda e, i=ki: self.edit_key_date(i)) if self.tracker.master_writable else None
+                add(k.date, 0, f"★ {k.event}", "Review" if k.type == "Design Review" and st != "Held" else st, click)
+        for day in events.values():
+            day.sort(key=lambda ev: (ev[0], ev[1]))
+        return events
+
+    def calendar_view(self):
+        today = date.today()
+        hidden = set(load_config().get("calendar_hidden", []))
+        events = self.calendar_events(hidden)
+        month = self.cal_month
+
+        def toggle(name):
+            def handler(e):
+                cfg = load_config()
+                h = set(cfg.get("calendar_hidden", []))
+                h.symmetric_difference_update({name})
+                cfg["calendar_hidden"] = sorted(h)
+                save_config(cfg)
+                self.show("calendar")
+            return handler
+
+        def go(months):
+            def handler(e):
+                if months == 0:
+                    self.cal_month = today.replace(day=1)
+                else:
+                    m = self.cal_month.month - 1 + months
+                    self.cal_month = date(self.cal_month.year + m // 12, m % 12 + 1, 1)
+                self.show("calendar")
+            return handler
+
+        chips = [ft.Chip(label=ft.Text(f"{emoji(t.name)} {_short(t.name)}"), selected=t.name not in hidden,
+                         on_select=toggle(t.name), show_checkmark=False) for t in self.tracker.subteams]
+        chips += [ft.Chip(label=ft.Text(f"{icon} {name}"), selected=name not in hidden, on_select=toggle(name), show_checkmark=False)
+                  for icon, name in (("★", "Key dates"), ("☐", "Actions"))]
+
+        start = month - timedelta(days=month.weekday())  # Monday on or before the 1st
+        weeks = []
+        for w in range(6):
+            days = [start + timedelta(days=w * 7 + i) for i in range(7)]
+            if w and days[0].month != month.month:
+                break
+            weeks.append(ft.Row([self.calendar_cell(d, month, today, events.get(d, [])) for d in days], spacing=4))
+        header = ft.Row([
+            heading("Calendar", "Gate due dates, actions and key dates. Click anything to open it."),
+            ft.Row([ft.IconButton(ft.Icons.CHEVRON_LEFT, tooltip="Previous month", on_click=go(-1)),
+                    ft.Text(f"{month:%B %Y}", theme_style=ft.TextThemeStyle.TITLE_LARGE, width=190, text_align=ft.TextAlign.CENTER),
+                    ft.IconButton(ft.Icons.CHEVRON_RIGHT, tooltip="Next month", on_click=go(1)),
+                    ft.OutlinedButton("Today", on_click=go(0))], tight=True),
+        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.START)
+        weekdays = ft.Row([ft.Container(ft.Text(d, weight=ft.FontWeight.W_600, color=ft.Colors.ON_SURFACE_VARIANT), expand=1,
+                                        padding=ft.Padding.only(left=8)) for d in ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")], spacing=4)
+        return ft.Column([header, ft.Row(chips, wrap=True, spacing=8, run_spacing=8), weekdays, *weeks],
+                         spacing=10, scroll=ft.ScrollMode.AUTO), None
+
+    def calendar_cell(self, d, month, today, day_events, limit=3):
+        is_today = d == today
+        number = ft.Container(
+            ft.Text(str(d.day), size=12, weight=ft.FontWeight.W_600 if is_today else None,
+                    color=ft.Colors.ON_PRIMARY if is_today else (None if d.month == month.month else ft.Colors.OUTLINE)),
+            bgcolor=ft.Colors.PRIMARY if is_today else None, border_radius=11, width=22, height=22, alignment=ft.Alignment.CENTER,
+        )
+        items = [self.calendar_event(ev) for ev in day_events[:limit]]
+        if len(day_events) > limit:
+            items.append(ft.Text(f"+{len(day_events) - limit} more", size=11, color=ft.Colors.PRIMARY, weight=ft.FontWeight.W_600))
+        return ft.Container(
+            ft.Column([number, *items], spacing=3, tight=True),
+            expand=1, height=128, padding=6, border_radius=8,
+            border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT),
+            bgcolor=None if d.month == month.month else ft.Colors.SURFACE_CONTAINER_LOW,
+            on_click=(lambda e: self.day_dialog(d, day_events)) if day_events else None, ink=bool(day_events),
+        )
+
+    def calendar_event(self, ev, dense=True):
+        _, label, key, click = ev
+        bg, fg = CALENDAR_COLOURS.get(key, STATUS_COLOURS.get(key, STATUS_COLOURS["No date"]))
+        return ft.Container(
+            ft.Text(label, size=11 if dense else 14, color=fg, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, tooltip=label),
+            bgcolor=bg, border_radius=4, padding=ft.Padding.symmetric(horizontal=6, vertical=2 if dense else 8),
+            on_click=click, ink=click is not None,
+        )
+
+    def day_dialog(self, d, day_events):
+        self.page.show_dialog(ft.AlertDialog(
+            title=ft.Text(f"{d:%A %d %B}"),
+            content=ft.Container(ft.Column([self.calendar_event(ev, dense=False) for ev in day_events], tight=True, spacing=6,
+                                           scroll=ft.ScrollMode.AUTO), width=460),
+            actions=[ft.TextButton("Close", on_click=lambda e: self.page.pop_dialog())],
+        ))
 
     # ---- subteam
 

@@ -42,7 +42,8 @@ You only do this once per computer. It's Windows-first; Mac/Linux work too, see 
    py -m pip install -r requirements.txt
    ```
 
-   This installs [Flet](https://flet.dev) (the UI) and [openpyxl](https://openpyxl.readthedocs.io) (reads and writes the Excel files).
+   This installs [Flet](https://flet.dev) (the UI), [openpyxl](https://openpyxl.readthedocs.io) (reads and writes the Excel files)
+   and [matplotlib](https://matplotlib.org) (only used by the Gantt export).
 
 **4. Start it** by double-clicking **`Project Tracker.pyw`**. The window opens in the middle of the screen with no terminal behind it.
    The first launch can take 10–20 seconds while Flet unpacks.
@@ -125,6 +126,10 @@ Files you can only view are synced **read-only**, so the app shows them as **Vie
     Use the filter box to search by part, owner or note. Click a part to see its details and **gate history**;
   * its **actions**, open ones first;
   * how many gates it has passed **on time**, in the subtitle.
+* **Calendar** is a month view of every gate due date, action and key date.
+  * Use the chips at the top to show or hide each subteam, key dates and actions. Your choice is remembered.
+  * Colours: red = late, amber = due soon, green = on track, grey = done, blue = a gate still to come, purple = an upcoming design review.
+  * Click an item to open it, or click a busy day to see everything on it. Use ‹ › to change month and *Today* to jump back.
 * **Key dates** lists competition deadlines, design reviews (gate meetings) and milestones, with the people responsible for each.
   Overdue ones stay visible until marked done. Turn on *Show past* to see the rest.
 * **↻** reloads the files (do this after a lead says they've updated). **☾** switches between light and dark mode.
@@ -154,6 +159,33 @@ Files you can only view are synced **read-only**, so the app shows them as **Vie
 * **`Master.xlsx > All Parts` and `All Actions`** are rebuilt automatically whenever someone with edit access to the master saves anything.
   They let people without the app see everything in the browser. Don't edit those sheets by hand.
 * **In the meeting**, go through *Needs attention* first, then *Next 14 days*. Record each review's follow-ups as actions straight away.
+
+### Gantt chart export (for look-backs and reports)
+
+`export_gantt.py` makes a PDF Gantt chart of the season, in the same style as the *Pit Wall* newsletter. Run it from the app folder:
+
+```
+py export_gantt.py
+```
+
+It reads the tracker folder the app last used, writes `Gantt <date>.pdf` to your Downloads folder, and opens it. Options:
+
+| Option | Does |
+|---|---|
+| `--subteams Aero Suspension` | Only these subteams |
+| `--from 2026-09-01 --to 2027-06-30` | Only this date range |
+| `--car UCR-05` | Car name in the title (default `UCR-04`) |
+| `--out "somewhere\file.pdf"` | Choose the output file |
+| `--folder "...\Project Tracker"` | Use a different tracker folder |
+| `--no-open` | Don't open the PDF afterwards |
+
+How to read it:
+* **Header timeline:** the *Milestone* key dates. Red up to now, a ringed dot for the next milestone, white after that.
+* **Rows:** one per part, grouped by subteam.
+* **Bars:** each gate is a bar from the previous gate's due date to its own due date. White = passed, red = current gate, outline = still to come.
+* **◆ diamonds:** when a gate was *actually* passed, from the gate history. White = on time or early; red = late, with a line back to the due date. This is the "in hindsight" part.
+* **Dashed lines:** key dates, with design reviews in red. The **Key dates** strip underneath names them.
+* **Solid red line:** today.
 
 ---
 
@@ -239,7 +271,8 @@ The **Plan** sheet looks like this:
 | `tracker_app.py` | The app (Flet UI) |
 | `tracker_core.py` | Reads and writes the Excel files, status rules, save safety. No UI code. |
 | `setup_tracker.py` | Creates an empty tracker folder |
+| `export_gantt.py` | Exports the season as a Pit Wall-style Gantt PDF |
 | `requirements.txt` | Python dependencies |
-| `assets/` | App icon (`icon.svg` source, `icon.ico` with a native render per size) |
+| `assets/` | App icon (`icon.svg` source, `icon.ico` with a native render per size) and the full UCR logo (`logo.svg`, `logo.png`) used in the Gantt header |
 
 The tracker data (`Project Tracker/`) is **not** in this repo. It lives on SharePoint and contains members' names.
