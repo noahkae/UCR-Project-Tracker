@@ -56,10 +56,10 @@ CALENDAR_COLOURS = {  # calendar-only keys: gates still to come, and upcoming de
     "Future": (ft.Colors.SECONDARY_CONTAINER, ft.Colors.ON_SECONDARY_CONTAINER),
     "Review": (ft.Colors.TERTIARY_CONTAINER, ft.Colors.ON_TERTIARY_CONTAINER),
 }
-# Team look, from the Pit Wall newsletter and the Gantt export: near-black, red, warm grey, Arial.
+# Team look, from the Pit Wall newsletter and the Gantt export: near-black, red, warm grey.
 # Pure brand red (#FF0000) stays in the logo; text and icons use Google's softer reds (dark #F28B82, light #C5221F),
 # per Material's advice to avoid saturated colours for text on dark surfaces. Both pass WCAG AA on their backgrounds.
-FONT = "Arial"
+FONT = None  # the platform default (Segoe UI on Windows); "Arial" matches the documents
 PALETTE = {
     "dark": dict(
         primary="#F28B82", on_primary="#601410", primary_container="#5A0B0B", on_primary_container="#FFDAD5",
