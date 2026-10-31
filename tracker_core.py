@@ -233,6 +233,46 @@ def record_part_change(team, old, new, today=None):
         team.log = [e for e in team.log if not (e.part == new.name and e.gate in undone)]
 
 
+def check_gates(names):
+    """The problem with a proposed gate list, or None if it's fine."""
+    if not names:
+        return "A subteam needs at least one gate."
+    if any(not n for n in names):
+        return "A gate can't be blank."
+    if any(c in n for n in names for c in ',"'):
+        return "Gate names can't contain commas or quotes."
+    if DONE.casefold() in (n.casefold() for n in names):
+        return f'"{DONE}" is reserved; it means every gate is passed.'
+    if len({n.casefold() for n in names}) < len(names):
+        return "Two gates have the same name."
+    if len(",".join(names + [DONE])) > 250:
+        return "The gate names are too long in total for Excel's dropdown."
+    return None
+
+
+def change_gates(team, gates):
+    """Replace a subteam's gates. `gates` is a list of (old name or None for a new gate, new name), in order.
+
+    Renamed gates keep their due dates and gate history. A removed gate loses its due dates;
+    a part whose current gate was removed moves to the first gate it hasn't passed yet.
+    """
+    rename = {old: new for old, new in gates if old}
+    names = [new for _, new in gates]
+    for p in team.parts:
+        cur = current_gate(p, team.gates)
+        if cur != DONE:
+            if cur in rename:
+                cur = rename[cur]
+            else:
+                passed = {rename.get(g) for g in team.gates[:team.gates.index(cur)]}
+                cur = next((n for n in names if n not in passed), DONE)
+        p.current = cur
+        p.dates = {new: p.dates.get(old) if old else None for old, new in gates}
+    for entry in team.log:
+        entry.gate = rename.get(entry.gate, entry.gate)
+    team.gates = names
+
+
 # --------------------------------------------------------------------------- file checks
 
 
@@ -350,12 +390,7 @@ def load_subteam(path):
     if PLAN_SHEET not in wb.sheetnames:
         return None
     ws = wb[PLAN_SHEET]
-    header = [str(c.value).strip() if c.value is not None else "" for c in ws[1]]
-    gates = []
-    for h in header[len(FIXED_COLS):]:
-        if not h:
-            break
-        gates.append(h)
+    gates = _gate_headers(ws)
     renamed = dict(zip(OLD_DEFAULT_GATES, DEFAULT_GATES)) if gates == OLD_DEFAULT_GATES else {}
     gates = [renamed.get(g, g) for g in gates]
     parts = []
@@ -455,24 +490,13 @@ def _write_rows(ws, rows, width, date_cols):
                 c.number_format = "yyyy-mm-dd"
 
 
-def _sync_gate_headers(ws, gates):
-    """Write the gate names into the header row (upgrades files with the old default gates)."""
-    n = len(FIXED_COLS)
-    if [ws.cell(1, n + 1 + i).value for i in range(len(gates))] == gates:
-        return
-    for i, g in enumerate(gates):
-        ws.cell(1, n + 1 + i).value = g
-        ws.column_dimensions[get_column_letter(n + 1 + i)].width = max(15, len(g) + 4)
-    for dv in ws.data_validations.dataValidation:
-        if "C2:" in str(dv.sqref):  # the Current Gate dropdown
-            dv.formula1 = '"' + ",".join(gates + [DONE]) + '"'
-
-
-def create_subteam_file(path, gates=DEFAULT_GATES):
-    """An empty subteam plan with headers, dropdowns and highlighting."""
-    wb = Workbook()
-    ws = wb.active
-    ws.title = PLAN_SHEET
+def _plan_sheet(wb, gates):
+    """A fresh, empty Plan sheet for these gates, with headers, dropdowns and highlighting.
+    Replaces the existing one, so changing the gates (or upgrading old default gates) keeps Excel's formatting right."""
+    if PLAN_SHEET in wb.sheetnames:
+        wb.remove(wb[PLAN_SHEET])
+    ws = wb.create_sheet(PLAN_SHEET, 0)
+    wb.active = 0
     n = len(FIXED_COLS)
     _header(ws, FIXED_COLS + gates, [HEADER_FILL] * n + [GATE_FILL] * len(gates))
     for col, width in zip("ABCDE", (28, 18, 16, 10, 40)):
@@ -495,6 +519,19 @@ def create_subteam_file(path, gates=DEFAULT_GATES):
     _list(ws, f"C2:C{FORMAT_ROWS + 1}", gates + [DONE])
     _list(ws, f"D2:D{FORMAT_ROWS + 1}", FLAGS)
     ws.freeze_panes = "B2"
+
+
+def _gate_headers(ws):
+    n = len(FIXED_COLS)
+    headers = [str(c.value).strip() if c.value is not None else "" for c in ws[1]][n:]
+    return headers[:headers.index("")] if "" in headers else headers
+
+
+def create_subteam_file(path, gates=DEFAULT_GATES):
+    """An empty subteam plan with headers, dropdowns and highlighting."""
+    wb = Workbook()
+    wb.remove(wb.active)
+    _plan_sheet(wb, gates)
     _ensure_side_sheets(wb)
     _save_atomic(wb, Path(path))
 
@@ -536,7 +573,8 @@ def save_subteam(team):
     ensure_can_save(team.path, team.mtime)
     wb = load_workbook(team.path)
     _ensure_side_sheets(wb)
-    _sync_gate_headers(wb[PLAN_SHEET], team.gates)
+    if _gate_headers(wb[PLAN_SHEET]) != team.gates:
+        _plan_sheet(wb, team.gates)
     _write_rows(
         wb[PLAN_SHEET],
         [[p.name, p.owner, p.current, p.flag, p.notes] + [p.dates.get(g) for g in team.gates] for p in team.parts],

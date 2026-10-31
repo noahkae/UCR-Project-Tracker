@@ -151,6 +151,10 @@ undoes the change and reloads.
 
 ### Subteam leads (your tab shows "You can edit")
 
+* **Edit gates** (top of your subteam page) changes the gates your parts move through: rename, add, remove or reorder them,
+  or **Reset to default** (DR01 - Concept → DR02 - Detailed Design → DR03 - Final Design → Manufacturing → Testing).
+  Renamed gates keep their due dates and history. Removing a gate deletes its due dates, and parts that were at it move
+  to the next gate they haven't passed. The app rebuilds the Plan sheet so Excel's dropdown and highlighting match.
 * **Add part** (bottom-right button): give it a name and owner, then fill in a **due date for each gate**.
 * **Click a part** to edit it:
   * **Gate passed** moves the part to its next gate (after the last gate it becomes *Done*). When you save, the app
@@ -256,7 +260,7 @@ The **Plan** sheet looks like this:
 
 ## 7. Customising
 
-* **Rename or add gates for a subteam:** edit the header cells after *Notes* in that subteam's file. The app reads the gates from the headers, in order.
+* **Change a subteam's gates:** the lead clicks **Edit gates** on the subteam page (see section 4).
   Files made with the original gates (*Concept*, *Detailed Design*, *Drawings*) show the DR01–DR03 names, and are
   updated to them the next time that subteam saves from the app.
 * **Add a subteam:** copy any subteam file in `Subteams/`, rename it (e.g. `Cooling.xlsx`) and clear its rows. Then add its emoji to `SUBTEAM_EMOJI` in `tracker_app.py`; it shows 🔧 otherwise.

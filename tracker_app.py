@@ -512,11 +512,11 @@ class TrackerApp:
                    spacing=6, tight=True),
             bgcolor=bg, border_radius=16, padding=ft.Padding.symmetric(horizontal=14, vertical=8),
         )
-        sub = " → ".join(team.gates)
         hit, total = core.on_time(team)
-        if total:
-            sub += f"   ·   Gates passed on time: {hit} of {total}"
-        header = ft.Row([heading(f"{emoji(team.name)}  {team.name}", sub), lock], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
+        sub = f"Gates passed on time: {hit} of {total}" if total else None
+        edit_gates = ft.OutlinedButton("Edit gates", icon=ft.Icons.TUNE, on_click=lambda e: self.edit_gates(team)) if team.writable else None
+        header = ft.Row([heading(f"{emoji(team.name)}  {team.name}", sub), ft.Row([c for c in (edit_gates, lock) if c], spacing=12)],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
 
         table = ft.DataTable(
             columns=[ft.DataColumn(ft.Text(h)) for h in ("Part", "Owner", "Gate", "Due", "Status", "Notes")],
@@ -688,14 +688,81 @@ class TrackerApp:
             team.actions[index].closed = date.today() if done else None
         self.commit(team, change, dialog=False)
 
+    def edit_gates(self, team):
+        """Let the lead rename, add, remove and reorder their subteam's gates."""
+        rows = [[g, ft.TextField(value=g, dense=True, expand=True)] for g in team.gates]  # [name in the file or None, field]
+        column = ft.Column(spacing=4, tight=True)
+        error = ft.Text(color=ft.Colors.ERROR, size=13, visible=False)
+
+        def render():
+            column.controls = [
+                ft.Row([
+                    ft.Text(f"{i + 1}.", width=22, color=ft.Colors.ON_SURFACE_VARIANT), field,
+                    ft.IconButton(ft.Icons.ARROW_UPWARD, tooltip="Move up", disabled=i == 0, on_click=move(i, -1)),
+                    ft.IconButton(ft.Icons.ARROW_DOWNWARD, tooltip="Move down", disabled=i == len(rows) - 1, on_click=move(i, 1)),
+                    ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip="Remove", on_click=remove(i)),
+                ], spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+                for i, (_, field) in enumerate(rows)]
+
+        def refresh():
+            render()
+            column.update()
+
+        def move(i, step):
+            def handler(e):
+                rows[i], rows[i + step] = rows[i + step], rows[i]
+                refresh()
+            return handler
+
+        def remove(i):
+            def handler(e):
+                rows.pop(i)
+                refresh()
+            return handler
+
+        def add(e):
+            rows.append([None, ft.TextField(hint_text="New gate", dense=True, expand=True, autofocus=True)])
+            refresh()
+
+        def reset(e):
+            rows[:] = [[g if g in team.gates else None, ft.TextField(value=g, dense=True, expand=True)] for g in core.DEFAULT_GATES]
+            refresh()
+
+        def save(e):
+            gates = [(old, field.value.strip()) for old, field in rows]
+            problem = core.check_gates([name for _, name in gates])
+            if problem:
+                error.value, error.visible = problem, True
+                error.update()
+                return
+            if gates == [(g, g) for g in team.gates]:
+                self.page.pop_dialog()
+                return
+            self.commit(team, lambda: core.change_gates(team, gates))
+
+        render()
+        self.page.show_dialog(ft.AlertDialog(
+            title=ft.Text(f"Gates for {team.name}"),
+            content=ft.Container(ft.Column([
+                ft.Text("Parts move through these in order. Renaming a gate keeps its due dates and history; "
+                        "removing one deletes its due dates.", size=13, color=ft.Colors.ON_SURFACE_VARIANT),
+                column,
+                ft.Row([ft.TextButton("Add gate", icon=ft.Icons.ADD, on_click=add),
+                        ft.TextButton("Reset to default", icon=ft.Icons.RESTART_ALT, on_click=reset,
+                                      tooltip=" → ".join(core.DEFAULT_GATES))]),
+                error,
+            ], tight=True, spacing=12), width=520),
+            actions=[ft.TextButton("Cancel", on_click=lambda e: self.page.pop_dialog()), ft.FilledButton("Save", on_click=save)],
+        ))
+
     def commit(self, team, change, dialog=True):
         """Apply a change to a subteam and save it; on failure undo it (and reload if someone else saved first)."""
-        backup = copy.deepcopy((team.parts, team.actions, team.log))
+        backup = copy.deepcopy((team.parts, team.actions, team.log, team.gates))
         change()
         try:
             core.save_subteam(team)
         except core.SaveError as e:
-            team.parts, team.actions, team.log = backup
+            team.parts, team.actions, team.log, team.gates = backup
             if dialog:
                 self.page.pop_dialog()
             self.toast(str(e), error=True)
