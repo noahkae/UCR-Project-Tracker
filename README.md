@@ -8,6 +8,9 @@ subteam's plan, deadlines and design reviews in one place.
 * **The data is just Excel.** If the app ever breaks, the plan is still readable and editable in Excel.
 * **There's no server, database, login screen or `.exe`.**
 
+**How to use the app:** the short illustrated guide [`docs/Project Tracker - How to use it.pdf`](docs/Project%20Tracker%20-%20How%20to%20use%20it.pdf)
+(for members and leads; setup is covered below).
+
 ---
 
 ## Contents
