@@ -258,7 +258,11 @@ The **Plan** sheet looks like this:
 ## 7. Customising
 
 * **Rename or add gates for a subteam:** edit the header cells after *Notes* in that subteam's file. The app reads the gates from the headers, in order.
-* **Add a subteam:** copy any subteam file in `Subteams/`, rename it (e.g. `Cooling.xlsx`) and clear its rows. Then add its emoji to `SUBTEAM_EMOJI` in `tracker_app.py`; it shows 🔧 otherwise.
+* **Add a subteam:** copy any subteam file in `Subteams/`, rename it (e.g. `Cooling.xlsx`) and clear its rows. It gets the
+  wrench icon until you give it its own (next point).
+* **Subteam icons** are line-art SVGs in `assets/` (`team-aero.svg`, `team-chassis.svg`, …: 48×48, black strokes, no fill;
+  the app tints them to the theme). To add one, save `assets/team-<name>.svg` and add it to `SUBTEAM_ICONS` in `tracker_app.py`,
+  which matches on the start of the subteam's file name.
 * **Remove a subteam:** delete or move its file out of `Subteams/`.
 * **Change the "due soon" window:** `DUE_SOON_DAYS` in `tracker_core.py`.
 * **Change the overview look-ahead:** `LOOK_AHEAD_DAYS` in `tracker_app.py`.
@@ -292,7 +296,7 @@ The **Plan** sheet looks like this:
 | `setup_tracker.py` | Creates an empty tracker folder |
 | `export_gantt.py` | Exports the season as a Pit Wall-style Gantt PDF |
 | `requirements.txt` | Python dependencies |
-| `assets/` | App icon (`icon.svg` source, `icon.ico` with a native render per size) and the full UCR logo (`logo.svg`, `logo.png`) used in the Gantt header |
+| `assets/` | App icon (`icon.svg` source, `icon.ico` with a native render per size), subteam line-art icons (`team-*.svg`) and the full UCR logo (`logo.svg`, `logo.png`) used in the Gantt header |
 
 The tracker data (`Project Tracker/`) is **not** in this repo. It lives on SharePoint and contains members' names.
 

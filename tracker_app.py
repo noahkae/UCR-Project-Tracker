@@ -25,9 +25,9 @@ from tracker_core import load_config, save_config
 ASSETS = Path(__file__).resolve().parent / "assets"
 LOOK_AHEAD_DAYS = 14
 FIXED_VIEWS = ["overview", "mywork", "calendar", "keydates"]
-SUBTEAM_EMOJI = {  # matched against the start of the subteam's file name
-    "aero": "🪽", "suspension": "🛞", "chassis": "🏎️", "powertrain": "🔋",
-    "electrical": "⚡", "driverless": "🤖",
+SUBTEAM_ICONS = {  # line-art icon in assets/, matched against the start of the subteam's file name
+    "aero": "team-aero.svg", "suspension": "team-suspension.svg", "chassis": "team-chassis.svg",
+    "powertrain": "team-powertrain.svg", "electrical": "team-electrical.svg", "driverless": "team-driverless.svg",
 }
 
 STATUS_COLOURS = {  # status -> (container colour, text colour)
@@ -155,7 +155,8 @@ class TrackerApp:
             ft.NavigationRailDestination(icon=ft.Icons.CALENDAR_MONTH_OUTLINED, selected_icon=ft.Icons.CALENDAR_MONTH, label="Calendar"),
             ft.NavigationRailDestination(icon=ft.Icons.EVENT_OUTLINED, selected_icon=ft.Icons.EVENT, label="Key dates"),
         ] + [
-            ft.NavigationRailDestination(icon=ft.Text(emoji(t.name), size=22), label=_short(t.name))
+            ft.NavigationRailDestination(icon=team_icon(t.name, 24), selected_icon=team_icon(t.name, 24, ft.Colors.ON_SECONDARY_CONTAINER),
+                                         label=_short(t.name))
             for t in self.tracker.subteams
         ]
         if self.view not in FIXED_VIEWS and self.view not in [t.name for t in self.tracker.subteams]:
@@ -299,7 +300,7 @@ class TrackerApp:
             chips = [pill(*c) for c in chips if c] or [pill("All on track", "On track") if t.parts else pill("No parts yet", "No date")]
             cards.append(ft.Container(
                 ft.Card(ft.Container(ft.Column([
-                    ft.Row([ft.Text(f"{emoji(t.name)}  {t.name}", weight=ft.FontWeight.W_600, size=16, expand=True),
+                    ft.Row([team_icon(t.name, 26, ft.Colors.PRIMARY), ft.Text(t.name, weight=ft.FontWeight.W_600, size=16, expand=True),
                             ft.Icon(ft.Icons.EDIT_OUTLINED if t.writable else ft.Icons.LOCK_OUTLINE, size=16,
                                     color=ft.Colors.ON_SURFACE_VARIANT, tooltip="You can edit" if t.writable else "View only")]),
                     ft.Text(f"{plural(len(t.parts), 'part')} · {stats['Done']} done · {plural(sum(a.closed is None for a in t.actions), 'open action')}",
@@ -390,9 +391,9 @@ class TrackerApp:
         today = date.today()
         events = {}
 
-        def add(d, order, label, key, click):
+        def add(d, order, label, key, click, icon):
             if d:
-                events.setdefault(d, []).append((order, label, key, click))
+                events.setdefault(d, []).append((order, label, key, click, icon))
 
         for t in self.tracker.subteams:
             if t.name in hidden:
@@ -402,16 +403,19 @@ class TrackerApp:
                 current = core.current_gate(p, t.gates)
                 for gi, g in enumerate(t.gates):
                     key = "Done" if gi < passed else (core.status(p, t.gates, today) if g == current else "Future")
-                    add(p.dates.get(g), 1, f"{emoji(t.name)} {p.name}: {g}", key, lambda e, t=t, i=pi: self.edit_part(t, i))
+                    add(p.dates.get(g), 1, f"{p.name}: {g}", key, lambda e, t=t, i=pi: self.edit_part(t, i),
+                        lambda size, colour, n=t.name: team_icon(n, size, colour))
             if "Actions" not in hidden:
                 for ai, a in enumerate(t.actions):
-                    add(a.due, 2, f"{'☑' if a.closed else '☐'} {a.text}", core.action_status(a, today),
-                        lambda e, t=t, i=ai: self.edit_action(t, i))
+                    add(a.due, 2, a.text, core.action_status(a, today), lambda e, t=t, i=ai: self.edit_action(t, i),
+                        lambda size, colour, done=a.closed is not None: ft.Icon(
+                            ft.Icons.CHECK_BOX_OUTLINED if done else ft.Icons.CHECK_BOX_OUTLINE_BLANK, size=size, color=colour))
         if "Key dates" not in hidden:
             for ki, k in enumerate(self.tracker.key_dates):
                 st = core.key_date_status(k, today)
                 click = (lambda e, i=ki: self.edit_key_date(i)) if self.tracker.master_writable else None
-                add(k.date, 0, f"★ {k.event}", "Review" if k.type == "Design Review" and st != "Held" else st, click)
+                add(k.date, 0, k.event, "Review" if k.type == "Design Review" and st != "Held" else st, click,
+                    lambda size, colour, kind=k.type: ft.Icon(TYPE_ICONS.get(kind, ft.Icons.EVENT), size=size, color=colour))
         for day in events.values():
             day.sort(key=lambda ev: (ev[0], ev[1]))
         return events
@@ -442,10 +446,11 @@ class TrackerApp:
                 self.show("calendar")
             return handler
 
-        chips = [ft.Chip(label=ft.Text(f"{emoji(t.name)} {_short(t.name)}"), selected=t.name not in hidden,
-                         on_select=toggle(t.name), show_checkmark=False) for t in self.tracker.subteams]
-        chips += [ft.Chip(label=ft.Text(f"{icon} {name}"), selected=name not in hidden, on_select=toggle(name), show_checkmark=False)
-                  for icon, name in (("★", "Key dates"), ("☐", "Actions"))]
+        chips = [ft.Chip(leading=team_icon(t.name, 18, ft.Colors.ON_SURFACE_VARIANT), label=ft.Text(_short(t.name)),
+                         selected=t.name not in hidden, on_select=toggle(t.name), show_checkmark=False) for t in self.tracker.subteams]
+        chips += [ft.Chip(leading=ft.Icon(icon, size=18), label=ft.Text(name), selected=name not in hidden, on_select=toggle(name),
+                          show_checkmark=False)
+                  for icon, name in ((ft.Icons.EVENT_OUTLINED, "Key dates"), (ft.Icons.CHECK_BOX_OUTLINE_BLANK, "Actions"))]
 
         start = month - timedelta(days=month.weekday())  # Monday on or before the 1st
         weeks = []
@@ -485,10 +490,12 @@ class TrackerApp:
         )
 
     def calendar_event(self, ev, dense=True):
-        _, label, key, click = ev
+        _, label, key, click, icon = ev
         bg, fg = CALENDAR_COLOURS.get(key, STATUS_COLOURS.get(key, STATUS_COLOURS["No date"]))
         return ft.Container(
-            ft.Text(label, size=11 if dense else 14, color=fg, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, tooltip=label),
+            ft.Row([icon(13 if dense else 18, fg),
+                    ft.Text(label, size=11 if dense else 14, color=fg, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, tooltip=label,
+                            expand=True)], spacing=4 if dense else 8, tight=True),
             bgcolor=bg, border_radius=4, padding=ft.Padding.symmetric(horizontal=6, vertical=2 if dense else 8),
             on_click=click, ink=click is not None,
         )
@@ -516,7 +523,8 @@ class TrackerApp:
         hit, total = core.on_time(team)
         if total:
             sub += f"   ·   Gates passed on time: {hit} of {total}"
-        header = ft.Row([heading(f"{emoji(team.name)}  {team.name}", sub), lock], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
+        header = ft.Row([ft.Row([team_icon(team.name, 40, ft.Colors.PRIMARY), heading(team.name, sub)], spacing=14), lock],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
 
         table = ft.DataTable(
             columns=[ft.DataColumn(ft.Text(h)) for h in ("Part", "Owner", "Gate", "Due", "Status", "Notes")],
@@ -844,9 +852,11 @@ def sharpen_window_icon(title, icon_path, timeout=20):
         time.sleep(0.5)
 
 
-def emoji(name):
+def team_icon(name, size=22, colour=ft.Colors.ON_SURFACE_VARIANT):
+    """The subteam's line-art icon (an SVG in assets/), tinted to fit the theme. Unknown subteams get a wrench."""
     key = name.lower()
-    return next((e for k, e in SUBTEAM_EMOJI.items() if key.startswith(k)), "🔧")
+    src = next((f for k, f in SUBTEAM_ICONS.items() if key.startswith(k)), "team-other.svg")
+    return ft.Image(src=src, width=size, height=size, color=colour, color_blend_mode=ft.BlendMode.SRC_IN)
 
 
 def _short(name):

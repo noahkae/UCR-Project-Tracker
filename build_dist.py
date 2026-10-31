@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parent
 FILES = [
     "launcher.py", "tracker_app.py", "tracker_core.py", "export_gantt.py", "setup_tracker.py",
     "requirements.txt", "assets/icon.ico", "assets/logo.png",
+    *[f"assets/{p.name}" for p in sorted((Path(__file__).resolve().parent / "assets").glob("team-*.svg"))],
 ]
 OUT = ROOT / "dist" / "UCR Project Tracker.pyzw"
 
