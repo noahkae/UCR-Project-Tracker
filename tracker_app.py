@@ -121,7 +121,7 @@ def lateness(entry):
 
 
 class TrackerApp:
-    def __init__(self, page, folder):
+    def __init__(self, page, folder, on_change_folder=None):
         self.page = page
         self.folder = Path(folder)
         self.tracker = None
@@ -133,6 +133,8 @@ class TrackerApp:
             trailing=ft.Column([
                 ft.IconButton(ft.Icons.REFRESH, tooltip="Reload files", on_click=lambda e: self.reload()),
                 ft.IconButton(ft.Icons.DARK_MODE_OUTLINED, tooltip="Light / dark", on_click=self.toggle_theme),
+                ft.IconButton(ft.Icons.FOLDER_OPEN_OUTLINED, tooltip=f"Tracker folder: {self.folder}\nClick to change",
+                              on_click=lambda e: on_change_folder()) if on_change_folder else ft.Container(),
             ]),
         )
         self.body = ft.Container(expand=True, padding=24)
@@ -851,33 +853,55 @@ def _short(name):
     return name if len(name) <= 12 else name.split()[0]
 
 
-def setup_screen(page, on_open, message=None):
-    path = ft.TextField(label="Synced 'Project Tracker' folder", expand=True, value=load_config().get("folder", ""))
+SHORTCUT_HELP = ("Each member adds the team's SharePoint files to OneDrive once: in SharePoint, open UCalgary-Racing → Documents "
+                 "and click 'Add shortcut to My files'. It then shows up in File Explorer under "
+                 f"'OneDrive - University of Calgary\\{core.SHAREPOINT_FOLDER}'.")
+
+
+def setup_screen(page, on_open, on_cancel=None):
+    """Choose the tracker folder: pre-filled with the one found in the team's default location."""
+    page.controls.clear()
+    page.floating_action_button = None
+    current = load_config().get("folder", "")
+    found = core.find_folder()
+    default = core.default_location()
+    if found:
+        intro = "Found the tracker here. Click Open to use it, or Browse to pick a different folder."
+    else:
+        intro = f"Couldn't find the tracker in the usual place ({default}). {SHORTCUT_HELP} Then choose the folder below."
+    path = ft.TextField(label="Tracker folder (the one holding Master.xlsx)", expand=True,
+                        value=current if on_cancel and current else str(found or default))
     picker = ft.FilePicker()
 
     async def browse(e):
-        chosen = await picker.get_directory_path(dialog_title="Choose the synced Project Tracker folder")
+        start = Path(path.value.strip().strip('"'))
+        start = start if start.is_dir() else (default if default.is_dir() else (core.onedrive_roots() or [Path.home()])[0])
+        chosen = await picker.get_directory_path(dialog_title="Choose the tracker folder", initial_directory=str(start))
         if chosen:
             path.value = chosen
+            path.error = None
             path.update()
 
     def open_folder(e):
-        folder = Path(path.value.strip().strip('"'))
-        if not (folder / core.MASTER).exists():
-            path.error = f"No {core.MASTER} in that folder"
+        folder = core.tracker_in(path.value.strip().strip('"'))
+        if not folder:
+            path.error = f"No {core.MASTER} in that folder (or the folder directly inside it)"
             path.update()
             return
         on_open(folder)
 
+    buttons = [ft.FilledButton("Open", icon=ft.Icons.ARROW_FORWARD, on_click=open_folder)]
+    if on_cancel:
+        buttons.append(ft.TextButton("Cancel", on_click=lambda e: on_cancel()))
     page.add(ft.Container(ft.Column([
         ft.Icon(ft.Icons.FOLDER_OPEN, size=48, color=ft.Colors.PRIMARY),
-        ft.Text("Connect to the tracker", theme_style=ft.TextThemeStyle.HEADLINE_SMALL, weight=ft.FontWeight.W_600),
-        ft.Text(message or "In SharePoint, open the Project Tracker library and click Sync (or 'Add shortcut to My files'). "
-                           "Then choose that folder here; it's usually under 'OneDrive - <university>'.",
-                color=ft.Colors.ON_SURFACE_VARIANT),
+        ft.Text("Choose the tracker folder", theme_style=ft.TextThemeStyle.HEADLINE_SMALL, weight=ft.FontWeight.W_600),
+        ft.Text(intro, color=ft.Colors.ON_SURFACE_VARIANT),
         ft.Row([path, ft.IconButton(ft.Icons.FOLDER_OPEN, tooltip="Browse", on_click=browse)]),
-        ft.FilledButton("Open", icon=ft.Icons.ARROW_FORWARD, on_click=open_folder),
-    ], spacing=16, horizontal_alignment=ft.CrossAxisAlignment.START), width=560, padding=32))
+        ft.Row(buttons, spacing=12),
+        ft.Text(SHORTCUT_HELP if found else "", size=12, color=ft.Colors.OUTLINE),
+    ], spacing=16, horizontal_alignment=ft.CrossAxisAlignment.START), width=900, padding=32))
+    page.update()
 
 
 def main(page: ft.Page, folder=None, start=None):
@@ -898,19 +922,15 @@ def main(page: ft.Page, folder=None, start=None):
         cfg["folder"] = str(path)
         save_config(cfg)
         page.controls.clear()
-        app = TrackerApp(page, path)
+        app = TrackerApp(page, path, on_change_folder=lambda: setup_screen(page, open_tracker, on_cancel=lambda: open_tracker(path)))
         if start:
             app.show(start)
 
     folder = folder or cfg.get("folder")
     if folder and (Path(folder) / core.MASTER).exists():
         open_tracker(Path(folder))
-        return
-    found = core.find_folder()
-    if found:
-        open_tracker(found)
-        return
-    setup_screen(page, open_tracker, "Couldn't find the tracker folder you used last time." if folder else None)
+    else:
+        setup_screen(page, open_tracker)  # first run (or the remembered folder has gone): let the user choose
 
 
 if __name__ == "__main__":

@@ -85,7 +85,9 @@ You only do this once per computer. It's Windows-first; Mac/Linux work too, see 
 
    The script refuses to overwrite an existing tracker.
 
-**2. Upload `Project Tracker/` to SharePoint**, e.g. the team's Teams channel → *Files*, or a document library.
+**2. Upload the tracker to SharePoint**, into **UCalgary-Racing → Documents → Project Management**. Either put
+   `Master.xlsx` and `Subteams/` straight into *Project Management*, or upload the whole `Project Tracker/` folder into it.
+   The app finds either layout.
 
 **3. Set permissions** with *… → Manage access* on each file (or folder):
 
@@ -101,11 +103,23 @@ You only do this once per computer. It's Windows-first; Mac/Linux work too, see 
 
 ## 3. Connect the app to the tracker
 
-1. In SharePoint, open the *Project Tracker* folder and click **Sync** (or **Add shortcut to My files**).
-   OneDrive then keeps a local copy in File Explorer, usually under `OneDrive - University of Calgary`.
-2. Start the app. It searches your OneDrive folders for `Master.xlsx`. If it can't find one, it asks you to
-   **Browse** to the synced *Project Tracker* folder.
-3. The app remembers the folder. To change it later, delete `%APPDATA%\FSAETracker\config.json`.
+**Once per person: add the shortcut.** In SharePoint, open **UCalgary-Racing → Documents** and click **Add shortcut to My files**.
+The team's documents then appear in File Explorer under OneDrive:
+
+```
+C:\Users\<you>\OneDrive - University of Calgary\UCalgary-Racing - Documents\Project Management
+```
+
+**First start: choose the folder.** The first time the app opens, it shows *Choose the tracker folder*:
+* It looks in the location above automatically. Your own user name is filled in from Windows, so this works for everyone.
+* If the tracker is there, the path is already filled in, so just click **Open**.
+* If it isn't (e.g. the shortcut hasn't been added yet), the screen explains how to add it.
+* Either way you can **Browse** to any other folder instead.
+
+The app remembers your choice. To switch later, click the **folder** button at the bottom of the left rail; hovering over it
+shows the current folder.
+
+Files you can only view are synced **read-only**, so the app shows them as **View only** and you can't change them by accident.
 
 Files you can only view are synced **read-only**, so the app shows them as **View only** and you can't change them by accident.
 
@@ -262,7 +276,7 @@ The **Plan** sheet looks like this:
 | "… was changed by someone else" | Someone saved it at the same time. The app reloaded the file, so make your edit again. |
 | "… is view-only for you" | You don't have Edit access on SharePoint. Ask the PM. |
 | A subteam is missing | Check its file is in `Subteams/` and has a sheet called **Plan**. |
-| The app can't find the tracker | Make sure the SharePoint folder is synced (step 3), then browse to it. |
+| The app can't find the tracker | Add the SharePoint shortcut (section 3), wait for it to appear in File Explorer, then click the folder button in the app and **Browse** to it. |
 
 ---
 

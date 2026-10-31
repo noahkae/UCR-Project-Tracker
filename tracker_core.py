@@ -33,6 +33,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 
 MASTER = "Master.xlsx"
 SUBTEAM_DIR = "Subteams"
+SHAREPOINT_FOLDER = Path("UCalgary-Racing - Documents") / "Project Management"  # inside each member's OneDrive
 PLAN_SHEET = "Plan"
 ACTION_SHEET = "Actions"
 LOG_SHEET = "Gate Log"
@@ -283,12 +284,40 @@ def default_folder():
     return find_folder()
 
 
+def onedrive_roots():
+    """The user's OneDrive folders, work/school account first (e.g. C:/Users/<you>/OneDrive - University of Calgary)."""
+    roots = [os.environ.get("OneDriveCommercial"), os.environ.get("OneDrive")]
+    roots += [str(p) for p in sorted(Path.home().glob("OneDrive - *"))]
+    return list(dict.fromkeys(Path(r) for r in roots if r))
+
+
+def default_location():
+    """Where the team keeps the tracker: the 'UCalgary-Racing - Documents' SharePoint shortcut in your OneDrive.
+
+    Every member adds that shortcut once ('Add shortcut to My files' in SharePoint), so the path only
+    differs by the Windows user name, which OneDrive's environment variables already account for.
+    """
+    roots = onedrive_roots() or [Path.home() / "OneDrive - University of Calgary"]
+    for root in roots:
+        if (root / SHAREPOINT_FOLDER).is_dir():
+            return root / SHAREPOINT_FOLDER
+    return roots[0] / SHAREPOINT_FOLDER
+
+
+def tracker_in(folder):
+    """The tracker folder at or directly inside `folder` (the one holding Master.xlsx), or None."""
+    folder = Path(folder)
+    if (folder / MASTER).exists():
+        return folder
+    return next((hit.parent for hit in sorted(folder.glob(f"*/{MASTER}"))), None) if folder.is_dir() else None
+
 
 def find_folder():
-    """Look for a synced folder containing Master.xlsx under the user's OneDrive/SharePoint folders."""
-    home = Path.home()
-    bases = [Path(os.environ[e]) for e in ("OneDriveCommercial", "OneDrive") if os.environ.get(e)]
-    bases += [p for p in home.iterdir() if p.is_dir() and (p.name.startswith("OneDrive") or p.name == "SharePoint")]
+    """The tracker in the team's default location, else the first Master.xlsx found in the user's OneDrive folders."""
+    hit = tracker_in(default_location())
+    if hit:
+        return hit
+    bases = onedrive_roots() + [p for p in Path.home().iterdir() if p.is_dir() and p.name == "SharePoint"]
     for base in bases:
         for pattern in (MASTER, f"*/{MASTER}", f"*/*/{MASTER}"):
             for hit in base.glob(pattern):
