@@ -63,16 +63,16 @@ You only do this once per computer. It's Windows-first; Mac/Linux work too, see 
 **1. Create the tracker files.** Open a terminal in the folder holding `UCR Project Tracker.pyzw` (File Explorer → click the address bar → type `cmd` → Enter) and run:
 
    ```
-   py "UCR Project Tracker.pyzw" setup --out "Project Tracker"
+   py "UCR Project Tracker.pyzw" setup --out "UCR-04"
    ```
 
-   (From the source code, `py setup_tracker.py --out "Project Tracker"` does the same.)
+   (From the source code, `py setup_tracker.py --out "UCR-04"` does the same.)
 
-   This creates:
+   Each car gets its own tracker folder, named after the car. This creates:
 
    ```
-   Project Tracker/
-       Master.xlsx              key dates + the All Parts / All Actions rollups
+   UCR-04/
+       Master.xlsx              key dates, the general gate library and templates, the All Parts / All Actions rollups
        Subteams/
            Aero.xlsx
            Chassis & Controls.xlsx
@@ -84,13 +84,15 @@ You only do this once per computer. It's Windows-first; Mac/Linux work too, see 
 
    Options:
    * `--subteams Aero Suspension ...` picks your own subteam list.
-   * `--gates "DR01 - Concept" "DR02 - Detailed Design" ...` picks your own gate list (in order).
+   * `--gates "DR01 - Concept" "DR02 - Detailed Design" ...` picks the gates of the general *Standard* template (in order).
+   * `--car UCR-04` sets the car name (default: the folder name).
+
+   Later cars don't need this script: use **New car…** in the app (section 4).
 
    The script refuses to overwrite an existing tracker.
 
-**2. Upload the tracker to SharePoint**, into **UCalgary-Racing → Documents → Project Management**. Either put
-   `Master.xlsx` and `Subteams/` straight into *Project Management*, or upload the whole `Project Tracker/` folder into it.
-   The app finds either layout.
+**2. Upload the tracker to SharePoint**, into **UCalgary-Racing → Documents → Project Management**, as its own folder
+   (`Project Management/UCR-04/`). Next year's `UCR-05/` goes next to it; the app's car switcher lists every car folder there.
 
 **3. Set permissions** with *… → Manage access* on each file (or folder):
 
@@ -139,11 +141,16 @@ undoes the change and reloads.
   * the **next design review**, in the subtitle.
 * **My work**: pick your name once (it's remembered) to see **the parts you own or work on, your open actions and the key
   dates you're responsible for**, with anything late at the top. Key dates you're named on carry a **You** tag everywhere in the app.
-* **Subteam tabs** (left rail) show:
-  * the subteam's parts, sorted with problems first. The dots show each gate: filled = passed, ringed = being worked on
-    (several at once when gates run in parallel), hollow grey = skipped, faint = waiting. ⚠ marks a part whose dates break a
-    gate rule (hover to see which). Under the name are its **tags**; under the owner, anyone else working on it.
-    Filter by text (part, person, tag or note) or click a **tag** chip. Click a part to see its details;
+* **Subteam tabs** (left rail) have three views (switch at the top right; your choice is remembered):
+  * **List**: the parts, sorted with problems first. The dots show each gate of the part's template: filled = done,
+    amber = in progress, ringed = ready to start (several at once when gates run in parallel), hollow grey = off,
+    faint = waiting. ⚠ marks a part with a conflict or a date that breaks a gate rule (hover to see which). Under the name
+    are its **tags**; under the owner, anyone else working on it. Filter by text or click a **tag** chip;
+  * **Grid**: one grid per gate template, a row per assembly and sub-assembly, a box per gate (✓ done, ◐ in progress,
+    – off, empty = not started). **Right-click (or click) a box** to set it. A thick red border means late or out of order
+    (a gate done before the one it comes after: a *conflict*);
+  * **Design reviews**: a row per assembly with **DR1 Concept / DR2 Intermediate / DR3 Final**. Click a cell to set the
+    date, outcome and presenter. Upcoming reviews show in the owners' *My work*, the overview and the calendar;
   * its **actions**, open ones first;
   * how many gates it has passed **on time**, in the subtitle.
 * **Calendar** is a month view of every gate due date, action and key date.
@@ -154,33 +161,45 @@ undoes the change and reloads.
   official date, the team's **internal deadline**, track, competition, notes and the people responsible. Overdue ones stay
   visible until marked done. Turn on *Show past* to see the rest. The calendar shows internal deadlines (⏱) and spans
   blackouts and multi-day events across their days.
+* **Gates** (left rail) lists every **gate template** (the workflows parts move through) and the **gate library** they're
+  built from: each gate's code, name, designation (*General* or a sub-team), description, and **Used in** (how many
+  templates and items use it). Click a template or gate to see or edit it.
+* **The car** (e.g. *UCR-04*) shows under the logo. Click it to switch to another car's tracker, or start the next one.
 * **↻** reloads the files (do this after a lead says they've updated). **☾** switches between light and dark mode.
 
 ### Subteam leads (your tab shows "You can edit")
 
-* **Edit gates** (top of your subteam page) changes the gates your parts move through: rename, add, remove or reorder them,
-  or **Reset to default** (DR01 - Concept → DR02 - Detailed Design → DR03 - Final Design → Manufacturing → Testing).
-  * **Comes after** (chips under each gate): the gates that must be passed or skipped before this one starts. Gates with
-    the same prerequisites **run in parallel**, e.g. Aero's Mould Design only needs CFD Freeze, while Mounting Design
-    needs CFD Freeze *and* Mounting Concept. A gate can only come after gates above it in the list.
-  * **Due before**: a key date (e.g. *Chassis Freeze*) the gate must be due before. Parts whose date for that gate is later
-    get a ⚠ warning. Gates due inside a *Blackout* key date get one too, as do gates due before a gate they come after.
-  * Renamed gates keep their due dates and history; removing a gate deletes them.
+* **Gate templates** (*Gates* page, or the button on your subteam page): each part follows one template. *General*
+  templates (e.g. *Mechanical Standard*) are kept in the master and shared by every sub-team; your sub-team's own (e.g.
+  *Aero Car Program*, *Aero Development*) are kept in your file. **New template** builds one, and clicking one edits it:
+  * add gates by name or pick them from the **library** (☰); new gate names join the library with a short code;
+  * **Comes after** (chips under each gate): the gates that must be done or off before this one starts. Gates with the same
+    prerequisites **run in parallel**, e.g. Mould Design only needs CFD Freeze, while Mounting Design needs CFD Freeze
+    *and* Mounting Concept. A gate can only come after gates above it. Doing a gate before the ones it comes after is
+    allowed but shows as a **conflict**;
+  * **Due before**: a key date (e.g. *Chassis Freeze*) the gate must be due before. Parts dated later get a ⚠ warning, as do
+    gates due inside a *Blackout* or before a gate they come after;
+  * renaming a gate keeps its dates and history; removing one deletes them. A template that parts still follow can't be deleted.
+* **Gate library** (*Gates* page): **Add gate** with a code, name and description. A gate that's in use can't be renamed here
+  (rename it in its templates) or deleted.
 * **Add part** (bottom-right button): give it a name, an **owner** (the one accountable person), anyone else **working on it**,
-  any **tags** (e.g. *Development*, *Aero-Testing*; click a suggested tag to add it), then a **due date for each gate**.
+  any **tags** (e.g. *Development*, *Aero-Testing*; click a suggested tag to add it), its **gate template** (your sub-team's
+  default unless you pick another), then a **due date for each gate**.
 * **Sub-parts:** to keep big assemblies tidy, open a part (e.g. Front Wing) and click **Add sub-part**, or set *Sub-part of*
   when editing. Parts with sub-parts show collapsed with a summary ("8 sub-parts · 1 need attention"); click the arrow to
   expand. An assembly sorts by its worst sub-part, so problems still float to the top. Sub-parts go one level deep.
+  An assembly counts as **Done** once all its sub-assemblies are done.
 * **Click a part** to edit it:
-  * each **gate** has its own row: **Passed** on a gate being worked on records today as its pass date (edit the date if it
-    was passed earlier), **Undo** un-passes it (and anything after it), and **Skip** marks a gate that doesn't apply to this
-    part (e.g. no mould for a mounting bracket). The app shows whether each pass was early or late;
+  * each **gate** has its own row with its due date and a state: **Not started**, **In progress**, **Done** (records today;
+    edit the *Done on* date if it was earlier) or **Off** (doesn't apply to this part, e.g. no mould for a bracket). The app
+    shows whether each gate was done early or late. The grid's right-click menu sets the same states;
   * **Flag** marks the part as *At risk* or *Blocked*. It then appears under *Needs attention*, so raise it at the next meeting;
   * **Notes** is a one-line reason, e.g. "waiting on supplier".
 * **Actions** (follow-ups from design reviews):
   * *Add action* on your subteam page. Give each action one owner, a due date, the part it relates to, and where it came from (e.g. "DR2");
   * tick the box when it's done. Overdue actions show under *Needs attention*, and the owner sees them under *My work*.
-* **Weekly habit:** before the leads meeting, pass finished gates, update dates and flags, and tick off finished actions. It takes about 5 minutes.
+* **Weekly habit:** before the leads meeting, mark finished gates done (the grid is quickest), update dates and flags, and
+  tick off finished actions. It takes about 5 minutes.
 
 ### PM / captain
 
@@ -193,6 +212,13 @@ undoes the change and reloads.
     dates (e.g. finals), and **Event** for things that just happen. Add the **Track**, **Competition** and any **Notes**.
   * Tick **Done** once a deadline is submitted or a milestone met. Until then, a past deadline shows as **late**.
     Design reviews don't need ticking; once the date has passed they count as held.
+* **General gate library and templates** (*Gates* page) are yours to edit; sub-teams use them alongside their own.
+* **New sub-team** (Overview, top right): a name and a starting template. It creates `Subteams/<name>.xlsx`; on SharePoint,
+  give its lead Edit access to that file.
+* **New car…** (click the car name under the logo): starts the next car (e.g. *UCR-05*) as a new folder next to this one.
+  Choose what carries over: each sub-team's **assembly structure** (parts, sub-parts, templates, tags), the **gate library and
+  templates**, and the **key dates** (optionally moved a year later). Owners, dates and progress always start fresh. Set the
+  new folder's SharePoint permissions as in section 2.
 * **`Master.xlsx > All Parts` and `All Actions`** are rebuilt automatically whenever someone with edit access to the master saves anything.
   They let people without the app see everything in the browser. Don't edit those sheets by hand.
 * **In the meeting**, go through *Needs attention* first, then *Next 14 days*. Record each review's follow-ups as actions straight away.
@@ -231,16 +257,18 @@ How to read it:
 
 ## 5. How status is worked out
 
-Each gate of a part is **passed**, **skipped**, **being worked on** (everything it comes after is passed or skipped), or
-**waiting**. The part's *current gate* is the gate(s) being worked on, and its status uses the earliest due date among them.
+Each gate of a part's template is **done**, **off**, **in progress**, **ready** (everything it comes after is done or off) or
+**waiting**. The part's *current gate* is the gate(s) in progress or ready, and its status uses the earliest due date among them.
+An assembly is also done once all its sub-assemblies are done. A gate marked done or in progress while one it comes after
+isn't done is a **conflict**: it shows in red in the grid and puts the part under *Needs attention*.
 
 | Status | Meaning |
 |---|---|
-| **Late** | today is past the due date of a gate being worked on |
-| **Due soon** | a gate being worked on is due within 7 days |
+| **Late** | today is past the due date of a gate in progress or ready |
+| **Due soon** | one of them is due within 7 days |
 | **On track** | they're due later than that |
-| **No date** | the gates being worked on have no due dates yet |
-| **Done** | every gate is passed or skipped |
+| **No date** | they have no due dates yet |
+| **Done** | every gate is done or off (or, for an assembly, every sub-assembly is done) |
 
 **Flags** are separate from status and set by the lead:
 * **OK**
@@ -252,6 +280,7 @@ Each gate of a part is **passed**, **skipped**, **being worked on** (everything 
 * A deadline, milestone or freeze is *Done* once the PM ticks it; until then it's measured against the internal deadline
   if there is one.
 * A design review, blackout or event shows as *Now* while it's on and *Held* once it's over.
+* A DR1–DR3 review in the *Design reviews* view counts down to its date, then shows **Needs outcome** until one is entered.
 
 **On time** (subteam subtitle) counts the gates passed on or before their due date, out of all gates passed that had a due date.
 
@@ -259,41 +288,49 @@ Each gate of a part is **passed**, **skipped**, **being worked on** (everything 
 
 ## 6. Editing in Excel instead
 
-Leads can also edit their file directly in Excel (desktop or browser). Each subteam file has four sheets:
+Leads can also edit their file directly in Excel (desktop or browser). Each subteam file has these sheets:
 
 * **Plan**: the parts (below). This is the one you'd normally edit.
 * **Actions**: `Action | Part | Owner | Due | From | Closed`. A row is done once *Closed* has a date.
-* **Gate Log**: `Part | Gate | Due | Passed`. The app writes this when a gate is passed. A blank *Passed* means the gate was
-  passed before the app recorded it.
-* **Gates**: `Gate | After | Due before`. *After* lists (comma-separated) the gates that come first; blank = can start any time.
-  *Due before* names a key date. Edit this with **Edit gates** in the app rather than by hand.
+* **Gate Log**: `Part | Gate | Due | Passed | Status`. The app writes the gates that are done or in progress. A blank *Passed*
+  means the gate was done before the app recorded it.
+* **Design Reviews**: `Part | Review | Date | Outcome | Presenter | Notes`, one row per assembly and review.
+* **Gate Templates**: `Template | Designation | Gate | After | Due before`, one row per gate, in order. *After* lists
+  (comma-separated) gates earlier in the template that come first; *Due before* names a key date.
+* **Gate Library**: `Code | Gate | Designation | Description`, this sub-team's own gates.
+* **Settings**: the sub-team's default template.
 
-The master's **Key Dates** sheet is `Date | Event | Type | People | Done | Internal deadline | End date | Track | Competition | Notes`.
+Edit templates and the library in the app rather than by hand. The master has the same *Gate Templates* and *Gate Library*
+sheets for the general ones, a *Settings* sheet with the car name, and **Key Dates**:
+`Date | Event | Type | People | Done | Internal deadline | End date | Track | Competition | Notes`.
 
 The **Plan** sheet looks like this:
 
-| Part | Parent | Owner | Assignees | Tags | Current Gate | Flag | Notes | DR01 - Concept | DR02 - Detailed Design | DR03 - Final Design | Manufacturing | Testing |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Front Wing | | Sam | Yi, Alex | Car | DR02 - Detailed Design | OK | | 2026-10-11 | 2026-10-28 | 2026-11-10 | 2026-11-30 | 2026-12-20 |
-| Element 1 | Front Wing | Alex | | Composites | DR01 - Concept | OK | | 2026-10-04 | 2026-10-25 | N/A | 2026-11-28 | 2026-12-18 |
+| Part | Parent | Owner | Assignees | Tags | Template | Current Gate | Flag | Notes | DR01 - Concept | DR02 - Detailed Design | DR03 - Final Design | Manufacturing | Testing |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Front Wing | | Sam | Yi, Alex | Car | | DR02 - Detailed Design | OK | | 2026-10-11 | 2026-10-28 | 2026-11-10 | 2026-11-30 | 2026-12-20 |
+| Element 1 | Front Wing | Alex | | Composites | | DR01 - Concept | OK | | 2026-10-04 | 2026-10-25 | N/A | 2026-11-28 | 2026-12-18 |
 
 * *Parent* is blank for a top-level part; for a sub-part it's the name of the part it belongs to. *Assignees* and *Tags* are comma-separated.
+* *Template* is the gate template the part follows; blank means the sub-team's default. The gate columns cover every gate of
+  every template in use; a part only uses its own template's columns.
 * *Current Gate* lists the gate(s) being worked on, comma-separated, or *Done*. The app writes it; if you change it by hand,
   the app counts every gate before the ones you list as passed.
-* The gate columns hold due dates, or **N/A** for a gate the part skips. Excel highlights the gates being worked on and turns
-  them red when overdue, and greys out skipped gates and finished parts.
+* The gate columns hold due dates, or **N/A** for a gate that's off for the part. Excel highlights the current gates and
+  turns them red when overdue, and greys out gates that are off and finished parts.
 * The **Actions** and **Gate Log** sheets refer to a sub-part by its full name, e.g. `Front Wing / Element 1`.
-* Files made by older versions (fewer columns, no Gates sheet) still open; they're upgraded the next time the app saves them,
-  and their gates run one after another until a lead changes that in **Edit gates**.
+* Files made by older versions still open, with nothing lost; they're upgraded the next time the app saves them. A file
+  with its own gate list (or an older *Gates* sheet) becomes that sub-team's own template.
 
 ---
 
 ## 7. Customising
 
-* **Change a subteam's gates:** the lead clicks **Edit gates** on the subteam page (see section 4).
+* **Change a subteam's gates:** edit its template on the *Gates* page (see section 4).
   Files made with the original gates (*Concept*, *Detailed Design*, *Drawings*) show the DR01–DR03 names, and are
   updated to them the next time that subteam saves from the app.
-* **Add a subteam:** copy any subteam file in `Subteams/`, rename it (e.g. `Cooling.xlsx`) and clear its rows. Then add its emoji to `SUBTEAM_EMOJI` in `tracker_app.py`; it shows 🔧 otherwise.
+* **Add a subteam:** **New sub-team** on the Overview. To give it an emoji, add it to `SUBTEAM_EMOJI` in `tracker_app.py`;
+  it shows 🔧 otherwise.
 * **Remove a subteam:** delete or move its file out of `Subteams/`.
 * **Change the "due soon" window:** `DUE_SOON_DAYS` in `tracker_core.py`.
 * **Change the overview look-ahead:** `LOOK_AHEAD_DAYS` in `tracker_app.py`.

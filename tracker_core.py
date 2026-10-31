@@ -1,21 +1,27 @@
 """Read and write the tracker's Excel files. No UI code lives here.
 
-Folder layout (a SharePoint library, synced to each PC with OneDrive):
+Folder layout (a SharePoint library, synced to each PC with OneDrive). Each car is its own tracker folder:
 
-    Project Tracker/
-        Master.xlsx            PM/captain edits Key Dates; the app rewrites All Parts / All Actions
-        Subteams/
-            Aero.xlsx          only the Aero lead can edit
-            Suspension.xlsx
-            ...
+    Project Management/
+        UCR-04/
+            Master.xlsx        PM/captain: Key Dates, the general gate library and templates, Settings (car name);
+                               the app rewrites All Parts / All Actions
+            Subteams/
+                Aero.xlsx      only the Aero lead can edit
+                ...
+        UCR-05/ ...
 
-A subteam file has four sheets:
-    Plan       one row per part: parent, owner, assignees, tags, current gate(s), flag, notes, a due date per gate
-               ("N/A" in a gate's date cell skips that gate for the part)
-    Actions    follow-ups from design reviews: action, part, owner, due, from, closed
-    Gate Log   written by the app when a gate is passed: part, gate, due, passed
-    Gates      the gate rules: which gates each gate comes after (gates can run in parallel), and the key
-               date it must be due before. A file without it runs its gates in order, one after another.
+A subteam file has these sheets:
+    Plan            one row per part: parent, owner, assignees, tags, gate template, current gate(s), flag, notes,
+                    then a due date per gate ("N/A" = that gate is off for the part)
+    Actions         follow-ups from design reviews: action, part, owner, due, from, closed
+    Gate Log        gate states other than "not started": part, gate, due, passed (done date), status
+    Design Reviews  DR1 Concept / DR2 Intermediate / DR3 Final per assembly: date, outcome, presenter, notes
+    Gate Templates  this subteam's own gate templates: the gates in order, which gates each comes after, and the
+                    key date each must be due before
+    Gate Library    this subteam's own gates: code, name, description
+    Settings        the subteam's default template
+The master holds the same Gate Templates / Gate Library sheets for the general (all-subteam) ones.
 
 Permissions are SharePoint's: if Windows won't let the app write a file (you don't have
 Edit access), the app treats it as view-only.
@@ -41,15 +47,28 @@ SHAREPOINT_FOLDER = Path("UCalgary-Racing - Documents") / "Project Management"  
 PLAN_SHEET = "Plan"
 ACTION_SHEET = "Actions"
 LOG_SHEET = "Gate Log"
-GATE_SHEET = "Gates"
-FIXED_COLS = ["Part", "Parent", "Owner", "Assignees", "Tags", "Current Gate", "Flag", "Notes"]
+REVIEW_SHEET = "Design Reviews"
+TEMPLATE_SHEET = "Gate Templates"
+LIBRARY_SHEET = "Gate Library"
+SETTINGS_SHEET = "Settings"
+LEGACY_GATE_SHEET = "Gates"  # one template per subteam, from the version before templates
+FIXED_COLS = ["Part", "Parent", "Owner", "Assignees", "Tags", "Template", "Current Gate", "Flag", "Notes"]
 # Older files have a subset of these, in this order; they're read by header name and upgraded on save.
 SEP = " / "  # a sub-part's full name is "Parent / Part"
-SKIP = "N/A"  # in a gate's date cell: the part skips that gate
+SKIP = "N/A"  # in a gate's date cell: the gate is off for that part
 ACTION_COLS = ["Action", "Part", "Owner", "Due", "From", "Closed"]
-LOG_COLS = ["Part", "Gate", "Due", "Passed"]
-GATE_COLS = ["Gate", "After", "Due before"]
+LOG_COLS = ["Part", "Gate", "Due", "Passed", "Status"]
+REVIEW_COLS = ["Part", "Review", "Date", "Outcome", "Presenter", "Notes"]
+TEMPLATE_COLS = ["Template", "Designation", "Gate", "After", "Due before"]
+LIBRARY_COLS = ["Code", "Gate", "Designation", "Description"]
+DR_TYPES = ["DR1 Concept", "DR2 Intermediate", "DR3 Final"]
+OUTCOMES = ["Pass", "Pass with actions", "Fail"]
+GENERAL = "General"
+NOT_STARTED, IN_PROGRESS, DONE_STATE, OFF = "Not started", "In progress", "Done", "Off"
+STATES = [NOT_STARTED, IN_PROGRESS, DONE_STATE, OFF]
+DEFAULT_TEMPLATE = "Standard"
 DEFAULT_GATES = ["DR01 - Concept", "DR02 - Detailed Design", "DR03 - Final Design", "Manufacturing", "Testing"]
+DEFAULT_CODES = ["DR01", "DR02", "DR03", "MFG", "TST"]
 # Files made with the original default gates are shown with the new names, and rewritten with them on the next save.
 OLD_DEFAULT_GATES = ["Concept", "Detailed Design", "Drawings", "Manufacturing", "Testing"]
 FLAGS = ["OK", "At risk", "Blocked"]
@@ -58,7 +77,7 @@ KEY_DATE_COLS = ["Date", "Event", "Type", "People", "Done", "Internal deadline",
 KEY_DATE_TYPES = ["Deadline", "Design Review", "Milestone", "Freeze", "Blackout", "Event"]
 PERIOD_TYPES = ("Design Review", "Blackout", "Event")  # things that happen, rather than targets you can miss
 TRACKS = ["Team", "Mech", "Elec"]
-ROLLUP_COLS = ["Subteam", "Part", "Parent", "Owner", "Assignees", "Tags", "Current Gate", "Due", "Status", "Flag", "Notes"]
+ROLLUP_COLS = ["Subteam", "Part", "Parent", "Owner", "Assignees", "Tags", "Template", "Current Gate", "Due", "Status", "Flag", "Notes"]
 DUE_SOON_DAYS = 7
 FORMAT_ROWS = 300  # rows that get dropdowns / highlighting in the Excel files
 
@@ -88,19 +107,21 @@ class ChangedOnDiskError(SaveError):
 class Part:
     name: str = ""
     owner: str = ""
-    current: str = ""  # as read from the file; only used to work out passed gates in files the app didn't write
+    current: str = ""  # as read from the file; only used to work out done gates in files the app didn't write
     flag: str = "OK"
     notes: str = ""
     dates: dict = field(default_factory=dict)  # gate -> due date | None
     parent: str = ""  # name of the part this is a sub-part of (one level only), or ""
     assignees: list = field(default_factory=list)  # people working on it besides the owner
     tags: list = field(default_factory=list)  # e.g. ["Development", "Aero-Testing"]
-    passed: dict = field(default_factory=dict)  # gate -> (date passed | None if unknown, due date when passed)
-    skipped: set = field(default_factory=set)  # gates that don't apply to this part
+    passed: dict = field(default_factory=dict)  # done gates: gate -> (date done | None if unknown, due date when done)
+    skipped: set = field(default_factory=set)  # gates that are off for this part
+    template: str = ""  # gate template name; "" = the subteam's default
+    started: set = field(default_factory=set)  # gates marked in progress
 
     @property
     def key(self):
-        """What the Actions and Gate Log sheets call this part: "Front Wing / Element 1" for a sub-part."""
+        """What the Actions, Gate Log and Design Reviews sheets call this part: "Front Wing / Element 1" for a sub-part."""
         return f"{self.parent}{SEP}{self.name}" if self.parent else self.name
 
     def people(self):
@@ -122,26 +143,100 @@ class GatePass:
     part: str
     gate: str
     due: date
-    passed: date  # None when the gate was passed before the app recorded it
+    passed: date  # None when the gate was done before the app recorded it (or isn't done)
+    status: str = DONE_STATE
+
+
+@dataclass
+class Review:
+    part: str  # part key
+    review: str  # one of DR_TYPES
+    date: date = None
+    outcome: str = ""
+    presenter: str = ""
+    notes: str = ""
+
+
+@dataclass
+class GateDef:
+    """A gate in the library."""
+    name: str
+    code: str = ""
+    designation: str = GENERAL  # General, or the subteam it belongs to
+    description: str = ""
+
+
+@dataclass
+class Template:
+    """A gate workflow: gates in order, what each comes after (gates can run in parallel), and key-date rules."""
+    name: str
+    designation: str = GENERAL
+    gates: list = field(default_factory=list)
+    after: dict = field(default_factory=dict)  # gate -> gates it comes after (always earlier in the list)
+    due_before: dict = field(default_factory=dict)  # gate -> key date (event name) it must be due before
 
 
 @dataclass
 class Subteam:
     name: str
     path: Path
-    gates: list  # gate names in column order (always an order in which every gate comes after its prerequisites)
     parts: list
     writable: bool
     mtime: float
     actions: list = field(default_factory=list)
-    after: dict = field(default_factory=dict)  # gate -> gates it comes after
-    due_before: dict = field(default_factory=dict)  # gate -> key date (event name) it must be due before
-    unmatched_log: list = field(default_factory=list)  # Gate Log rows for parts/gates that no longer exist (e.g. renamed in Excel)
+    templates: dict = field(default_factory=dict)  # this subteam's own templates, by name (file order)
+    library: list = field(default_factory=list)  # this subteam's own gates (GateDef)
+    reviews: list = field(default_factory=list)
+    unmatched_log: list = field(default_factory=list)  # Gate Log rows for parts/gates that no longer exist
+    shared: dict = field(default_factory=dict)  # the general templates (from the master); not saved here
+    default_template: str = ""  # from the Settings sheet; "" = work it out
+    columns: list = field(default_factory=list)  # gate columns as read from the Plan sheet
+
+    @property
+    def default(self):
+        """The template new parts get, and parts with no template use."""
+        if self.default_template in self.templates or self.default_template in self.shared:
+            return self.default_template
+        if self.templates:
+            return next(iter(self.templates))
+        if DEFAULT_TEMPLATE in self.shared:
+            return DEFAULT_TEMPLATE
+        return next(iter(self.shared), "")
+
+    def available(self):
+        """Templates parts here can use: this subteam's own, then the general ones."""
+        return {**self.shared, **self.templates}
+
+    @property
+    def gates(self):
+        """The gate columns of the Plan sheet: every gate of every template in use here, in template order."""
+        used = [self.default] + list(self.templates) + [p.template for p in self.parts if p.template]
+        out = []
+        for name in dict.fromkeys(used):
+            t = self.available().get(name)
+            out += [g for g in (t.gates if t else []) if g not in out]
+        return out or list(self.columns)
+
+    # the default template's rules, for code (and tests) that think of a subteam as having one gate list
+    @property
+    def after(self):
+        return template_of(self, None).after
+
+    @property
+    def due_before(self):
+        return template_of(self, None).due_before
 
     @property
     def log(self):
-        """Every gate passed, part by part (what the Gate Log sheet holds), then any rows the app couldn't match."""
-        return [GatePass(p.key, g, *reversed(p.passed[g])) for p in self.parts for g in self.gates if g in p.passed] + self.unmatched_log
+        """Every gate that's done or in progress, part by part (what the Gate Log sheet holds), then unmatched rows."""
+        rows = []
+        for p in self.parts:
+            for g in template_of(self, p).gates:
+                if g in p.passed:
+                    rows.append(GatePass(p.key, g, p.passed[g][1], p.passed[g][0], DONE_STATE))
+                elif g in p.started:
+                    rows.append(GatePass(p.key, g, p.dates.get(g), None, IN_PROGRESS))
+        return rows + self.unmatched_log
 
 
 @dataclass
@@ -165,6 +260,23 @@ class Tracker:
     subteams: list
     master_writable: bool
     master_mtime: float
+    car: str = ""
+    library: list = field(default_factory=list)  # general gates (GateDef)
+    templates: dict = field(default_factory=dict)  # general templates, by name
+
+
+def standard_template(gates=DEFAULT_GATES, name=DEFAULT_TEMPLATE, designation=GENERAL):
+    return Template(name, designation, list(gates), linear(list(gates)), {})
+
+
+def standard_library(gates=DEFAULT_GATES):
+    codes = DEFAULT_CODES if list(gates) == DEFAULT_GATES else []
+    out, taken = [], set()
+    for i, g in enumerate(gates):
+        code = codes[i] if codes else auto_code(g, taken)
+        taken.add(code)
+        out.append(GateDef(g, code, GENERAL))
+    return out
 
 
 # --------------------------------------------------------------------------- rules
@@ -189,97 +301,163 @@ def linear(gates):
     return {g: gates[i - 1:i] for i, g in enumerate(gates)}
 
 
+def template_of(team, part):
+    """The template a part follows (its own choice, else the subteam's default). Never None."""
+    available = team.available()
+    name = (part.template if part is not None and part.template in available else "") or team.default
+    if name in available:
+        return available[name]
+    return Template(DEFAULT_TEMPLATE, GENERAL, list(team.columns), linear(list(team.columns)), {})
+
+
 def cleared(part, gate):
     return gate in part.passed or gate in part.skipped
 
 
+def ancestors(template, gate):
+    seen, todo = [], list(template.after.get(gate, []))
+    while todo:
+        g = todo.pop()
+        if g in template.gates and g not in seen:
+            seen.append(g)
+            todo += template.after.get(g, [])
+    return [g for g in template.gates if g in seen]
+
+
+def descendants(template, gate):
+    return [g for g in template.gates if gate in ancestors(template, g)]
+
+
 def open_gates(part, team):
-    return [g for g in team.gates if not cleared(part, g)]
+    return [g for g in template_of(team, part).gates if not cleared(part, g)]
 
 
 def active_gates(part, team):
-    """The gates being worked on now: not passed or skipped, and everything they come after is cleared (all the way back,
-    so skipping a gate doesn't let the gates after it start before the gates before it)."""
-    return [g for g in open_gates(part, team) if all(cleared(part, a) for a in ancestors(team, g))]
+    """Gates that are ready to work on: not done or off, and everything before them (all the way back) is cleared."""
+    t = template_of(team, part)
+    return [g for g in t.gates if not cleared(part, g) and all(cleared(part, a) for a in ancestors(t, g))]
+
+
+def working_gates(part, team):
+    """What the part is working on: the ready gates plus any marked in progress, in template order."""
+    ready = active_gates(part, team)
+    return [g for g in template_of(team, part).gates if g in ready or (g in part.started and not cleared(part, g))]
 
 
 def gate_state(part, team, gate):
-    """passed / skipped / active / waiting."""
+    """done / off / in progress / ready / waiting, or n/a when the gate isn't in the part's template."""
+    if gate not in template_of(team, part).gates:
+        return "n/a"
     if gate in part.passed:
-        return "passed"
+        return "done"
     if gate in part.skipped:
-        return "skipped"
-    return "active" if gate in active_gates(part, team) else "waiting"
+        return "off"
+    if gate in part.started:
+        return "in progress"
+    return "ready" if gate in active_gates(part, team) else "waiting"
+
+
+def state_name(part, gate):
+    """The state as the four-way toggle shows it."""
+    if gate in part.passed:
+        return DONE_STATE
+    if gate in part.skipped:
+        return OFF
+    return IN_PROGRESS if gate in part.started else NOT_STARTED
+
+
+def set_gate_state(part, gate, state, today=None):
+    """Set one gate to Not started / In progress / Done / Off. Out-of-order states are allowed (they show as conflicts)."""
+    part.started.discard(gate)
+    part.skipped.discard(gate)
+    if state != DONE_STATE:
+        part.passed.pop(gate, None)
+    if state == DONE_STATE and gate not in part.passed:
+        part.passed[gate] = (today or date.today(), part.dates.get(gate))
+    elif state == IN_PROGRESS:
+        part.started.add(gate)
+    elif state == OFF:
+        part.skipped.add(gate)
+
+
+def pass_gate(part, gate, today=None):
+    set_gate_state(part, gate, DONE_STATE, today)
+
+
+def unpass_gate(part, team, gate):
+    """Un-pass a gate, and with it every done gate that comes after it."""
+    for g in [gate] + descendants(template_of(team, part), gate):
+        part.passed.pop(g, None)
+
+
+def children(team, part):
+    """The sub-parts of a top-level part."""
+    return [p for p in team.parts if p.parent and p.parent == part.name] if not part.parent else []
 
 
 def is_done(part, team):
-    return not open_gates(part, team)
+    """Every gate of its template is done or off, or (for an assembly) every sub-assembly is done."""
+    kids = children(team, part)
+    return not open_gates(part, team) or (bool(kids) and all(is_done(k, team) for k in kids))
 
 
-def current_gate(part, team, sep=" + "):
-    """What the part is working on: its active gate(s), or Done."""
-    return DONE if is_done(part, team) else sep.join(active_gates(part, team))
+def current_gate(part, team, sep=" + ", rollup=True):
+    """What the part is working on (its ready / in-progress gates), or Done. With rollup=False an assembly's own gates
+    count, not its sub-assemblies (that's what the Plan sheet stores, since Done there means every gate is done)."""
+    done = is_done(part, team) if rollup else not open_gates(part, team)
+    return DONE if done else sep.join(working_gates(part, team))
 
 
 def due_date(part, team):
-    """The earliest due date among the active gates."""
-    dates = [part.dates.get(g) for g in active_gates(part, team) if part.dates.get(g)]
+    """The earliest due date among the gates it's working on."""
+    if is_done(part, team):
+        return None
+    dates = [part.dates.get(g) for g in working_gates(part, team) if part.dates.get(g)]
     return min(dates) if dates else None
 
 
 def status(part, team, today=None):
-    """A part's status comes from the earliest due date among its active gates."""
     return date_status(due_date(part, team), is_done(part, team), today)
 
 
 def needs_attention(part, team, today=None):
-    return status(part, team, today) == "Late" or part.flag != "OK"
+    return status(part, team, today) == "Late" or part.flag != "OK" or bool(conflicts(part, team))
 
 
 def progress(part, team):
-    """(gates cleared, gates in total)."""
-    return sum(cleared(part, g) for g in team.gates), len(team.gates)
+    """(gates cleared, gates in its template)."""
+    gates = template_of(team, part).gates
+    return sum(cleared(part, g) for g in gates), len(gates)
 
 
-def pass_gate(part, gate, today=None):
-    part.passed[gate] = (today or date.today(), part.dates.get(gate))
-    part.skipped.discard(gate)
-
-
-def unpass_gate(part, team, gate):
-    """Un-pass a gate, and with it every passed gate that comes after it."""
-    for g in [gate] + descendants(team, gate):
-        part.passed.pop(g, None)
-
-
-def ancestors(team, gate):
-    seen, todo = [], list(team.after.get(gate, []))
-    while todo:
-        g = todo.pop()
-        if g in team.gates and g not in seen:
-            seen.append(g)
-            todo += team.after.get(g, [])
-    return [g for g in team.gates if g in seen]
-
-
-def descendants(team, gate):
-    return [g for g in team.gates if gate in ancestors(team, g)]
+def conflicts(part, team):
+    """Gates marked done or in progress while a gate before them isn't done (or off)."""
+    t = template_of(team, part)
+    out = []
+    for g in t.gates:
+        if g in part.passed or (g in part.started and not cleared(part, g)):
+            missing = [a for a in ancestors(t, g) if not cleared(part, a)]
+            if missing:
+                out.append(f"{g} is {'done' if g in part.passed else 'in progress'} but {', '.join(missing)} isn't done yet.")
+    return out
 
 
 def rule_warnings(part, team, key_dates):
-    """Problems with a part's gate dates under the subteam's gate rules (warnings, not errors)."""
+    """Problems with a part's gates under its template's rules (warnings, not errors): out-of-order states, gates due
+    before a gate they come after, after their 'due before' key date, or inside a blackout."""
+    t = template_of(team, part)
     fmt = lambda d: d.strftime("%a %d %b")
     events = {k.event.casefold(): k for k in sorted((k for k in key_dates if k.date), key=lambda k: k.date, reverse=True)}
     blackouts = [k for k in key_dates if k.type == "Blackout" and k.date]
-    out = []
+    out = conflicts(part, team)
     for g in open_gates(part, team):
         due = part.dates.get(g)
         if not due:
             continue
-        for a in team.after.get(g, []):
+        for a in t.after.get(g, []):
             if not cleared(part, a) and part.dates.get(a) and due < part.dates[a]:
                 out.append(f"{g} is due before {a}, which comes first.")
-        kd = events.get(team.due_before.get(g, "").casefold())
+        kd = events.get(t.due_before.get(g, "").casefold())
         if kd and due > kd.date:
             out.append(f"{g} is due after {kd.event} ({fmt(kd.date)}); it has to be due before it.")
         for b in blackouts:
@@ -312,6 +490,16 @@ def key_date_needs_attention(kd, today=None):
     return key_date_status(kd, today) in ("Late", "Due soon")
 
 
+def review_status(review, today=None):
+    """Upcoming design reviews count down; once held they need an outcome."""
+    today = today or date.today()
+    if review.outcome:
+        return "Held"
+    if not review.date:
+        return "No date"
+    return "Needs outcome" if review.date < today else date_status(review.date, False, today)
+
+
 def split_names(text):
     """'Sam, Alex & Jo' -> ['Sam', 'Alex', 'Jo']."""
     return [n.strip() for n in re.split(r"[,;/&]| and ", text or "") if n.strip()]
@@ -336,14 +524,14 @@ def is_me(name, me):
 
 
 def on_time(team):
-    """(gates passed on or before their due date, gates passed that had a due date and a pass date)."""
-    timed = [g for g in team.log if g.due and g.passed]
+    """(gates done on or before their due date, gates done that had a due date and a done date)."""
+    timed = [g for g in team.log if g.status == DONE_STATE and g.due and g.passed]
     return sum(1 for g in timed if g.passed <= g.due), len(timed)
 
 
 def record_part_change(team, old, new):
-    """Keep Actions in step with an edited part: renaming a part (or moving it under another part) renames it
-    in the actions, and renaming a parent does the same for its sub-parts. (The Gate Log is written from the parts.)"""
+    """Keep Actions and Design Reviews in step with an edited part: renaming a part (or moving it under another part)
+    renames it there, and renaming a parent does the same for its sub-parts. (The Gate Log is written from the parts.)"""
     if old is None:
         return
     _rename_refs(team, old.key, new.key)
@@ -360,11 +548,9 @@ def _rename_refs(team, old_key, new_key):
     for action in team.actions:
         if action.part == old_key:
             action.part = new_key
-
-
-def children(team, part):
-    """The sub-parts of a top-level part."""
-    return [p for p in team.parts if p.parent and p.parent == part.name] if not part.parent else []
+    for review in team.reviews:
+        if review.part == old_key:
+            review.part = new_key
 
 
 def all_tags(team):
@@ -391,43 +577,135 @@ def check_part(team, part, index=None):
     return None
 
 
+RESERVED = [DONE, SKIP] + FIXED_COLS
+
+
 def check_gates(names):
     """The problem with a proposed gate list, or None if it's fine."""
     if not names:
-        return "A subteam needs at least one gate."
+        return "A template needs at least one gate."
     if any(not n for n in names):
         return "A gate can't be blank."
     if any(c in n for n in names for c in ',"+'):
         return "Gate names can't contain commas, quotes or +."
-    reserved = [DONE, SKIP] + FIXED_COLS
-    if any(n.casefold() == r.casefold() for n in names for r in reserved):
-        return f"These names are reserved: {', '.join(reserved)}."
+    if any(n.casefold() == r.casefold() for n in names for r in RESERVED):
+        return f"These names are reserved: {', '.join(RESERVED)}."
     if len({n.casefold() for n in names}) < len(names):
         return "Two gates have the same name."
     return None
 
 
-def change_gates(team, gates, after=None, due_before=None):
-    """Replace a subteam's gates. `gates` is a list of (old name or None for a new gate, new name), in order.
+def check_template_name(tracker, name, old=None):
+    if not name:
+        return "Give the template a name."
+    names = {n.casefold() for n in all_templates(tracker)} - ({old.casefold()} if old else set())
+    return f'There\'s already a template called "{name}".' if name.casefold() in names else None
 
-    `after` and `due_before` give the new rules by new name; without them, renamed gates keep their rules and a
-    new gate comes after the one before it. Rules only point back up the list, so the order stays valid.
-    Renamed gates keep their due dates, passes and skips; a removed gate's are dropped.
-    """
+
+def update_template(template, gates, after=None, due_before=None):
+    """Change a template's gates in place. `gates` is a list of (old name or None for a new gate, new name), in order;
+    `after` / `due_before` give the new rules by new name. Without them, renamed gates keep their rules and a new gate
+    comes after the one before it. Rules only point back up the list, so the order stays valid."""
     rename = {old: new for old, new in gates if old}
     names = [new for _, new in gates]
     if after is None:
-        after = {new: [rename[a] for a in team.after.get(old, []) if a in rename] if old else names[i - 1:i]
+        after = {new: [rename[a] for a in template.after.get(old, []) if a in rename] if old else names[i - 1:i]
                  for i, (old, new) in enumerate(gates)}
     if due_before is None:
-        due_before = {new: team.due_before.get(old, "") for old, new in gates if old}
-    team.after = {g: [a for a in after.get(g, []) if a in names[:i]] for i, g in enumerate(names)}
-    team.due_before = {g: due_before.get(g, "") for g in names if due_before.get(g)}
+        due_before = {new: template.due_before.get(old, "") for old, new in gates if old}
+    template.after = {g: [a for a in after.get(g, []) if a in names[:i]] for i, g in enumerate(names)}
+    template.due_before = {g: due_before.get(g, "") for g in names if due_before.get(g)}
+    template.gates = names
+
+
+def remap_parts(team, template_name, gates):
+    """After a template changed (`gates` = its (old or None, new) pairs): carry each affected part's dates and states
+    across to the new gate names; gates that were removed lose theirs, new gates start empty."""
     for p in team.parts:
+        if template_of(team, p).name != template_name:
+            continue
         p.dates = {new: p.dates.get(old) if old else None for old, new in gates}
-        p.passed = {rename[g]: v for g, v in p.passed.items() if g in rename}
-        p.skipped = {rename[g] for g in p.skipped if g in rename}
-    team.gates = names
+        p.passed = {new: p.passed[old] for old, new in gates if old in p.passed}
+        p.skipped = {new for old, new in gates if old in p.skipped}
+        p.started = {new for old, new in gates if old in p.started}
+
+
+def change_gates(team, gates, after=None, due_before=None):
+    """Change the gates of the subteam's default template (a subteam's own copy is made if the default is a general
+    template). `gates` is (old name or None, new name) pairs, in order. Renamed gates keep their dates and states."""
+    t = template_of(team, None)
+    if t.name not in team.templates:
+        t = Template(t.name if t.name not in team.shared else f"{team.name} gates", team.name, list(t.gates), dict(t.after),
+                     dict(t.due_before))
+        for p in team.parts:
+            if not p.template or p.template == template_of(team, None).name:
+                p.template = ""
+        team.templates = {t.name: t, **team.templates}
+        team.default_template = t.name
+    update_template(t, gates, after, due_before)
+    remap_parts(team, t.name, gates)
+    ensure_library(team, t)
+
+
+# ---- gate library
+
+
+def auto_code(name, taken=()):
+    """A short code for a gate: initials ("Mounting Design" -> "MD"), or the first letters of a one-word name."""
+    words = re.findall(r"[A-Za-z0-9]+", name)
+    base = ("".join(w[0] for w in words) if len(words) > 1 else (words[0][:3] if words else "G")).upper()[:5]
+    code, n = base, 2
+    taken = {t.casefold() for t in taken}
+    while code.casefold() in taken:
+        code, n = f"{base}{n}", n + 1
+    return code
+
+
+def library_for(tracker, designation=None):
+    """(GateDef, owner) for the whole library: general gates (owner None = the master), then each subteam's."""
+    out = [(g, None) for g in tracker.library]
+    for t in tracker.subteams:
+        out += [(g, t) for g in t.library]
+    return [(g, o) for g, o in out if designation is None or g.designation in (GENERAL, designation)]
+
+
+def ensure_library(owner, template, general_library=()):
+    """Add any gate of `template` that isn't in the library yet to `owner`'s library (a Subteam, or a Tracker for general)."""
+    known = {g.name.casefold() for g in list(owner.library) + list(general_library)}
+    taken = {g.code for g in list(owner.library) + list(general_library)}
+    for name in template.gates:
+        if name.casefold() not in known:
+            std = dict(zip(DEFAULT_GATES, DEFAULT_CODES)).get(name)
+            code = std if std and std not in taken else auto_code(name, taken)
+            taken.add(code)
+            owner.library.append(GateDef(name, code, owner.name if isinstance(owner, Subteam) else GENERAL))
+            known.add(name.casefold())
+
+
+def all_templates(tracker):
+    """(Template, owner) by name: general ones (owner None) and every subteam's own."""
+    out = {n: (t, None) for n, t in tracker.templates.items()}
+    for team in tracker.subteams:
+        out.update({n: (t, team) for n, t in team.templates.items()})
+    return out
+
+
+def template_users(tracker, name):
+    """How many parts follow this template."""
+    return sum(1 for t in tracker.subteams for p in t.parts if template_of(t, p).name == name)
+
+
+def gate_users(tracker, gate):
+    """(names of templates that use the gate, how many parts follow those templates)."""
+    names = [n for n, (t, _) in all_templates(tracker).items() if gate in t.gates]
+    return names, sum(template_users(tracker, n) for n in names)
+
+
+def code_of(tracker_or_team, gate):
+    libs = list(getattr(tracker_or_team, "library", []))
+    if isinstance(tracker_or_team, Tracker):
+        libs += [g for t in tracker_or_team.subteams for g in t.library]
+    return next((g.code for g in libs if g.name == gate and g.code), "")
 
 
 # --------------------------------------------------------------------------- file checks
@@ -528,10 +806,26 @@ def find_folder():
     return None
 
 
+def cars_near(folder):
+    """[(car name, tracker folder)] for this tracker and the ones next to it (one folder per car), newest name last."""
+    folder = Path(folder)
+    found = [f.parent for f in folder.parent.glob(f"*/{MASTER}")] if folder.parent.is_dir() else []
+    found = list(dict.fromkeys(found + [folder]))
+    return sorted(((_car_name(f), f) for f in found), key=lambda cf: cf[0].casefold())
+
+
+def _car_name(folder):
+    try:
+        return _settings(load_workbook(Path(folder) / MASTER, read_only=True)).get("Car") or Path(folder).name
+    except Exception:  # noqa: BLE001 - an unreadable neighbour just shows by its folder name
+        return Path(folder).name
+
+
 def load(folder):
     folder = Path(folder)
     master = folder / MASTER
-    ws = load_workbook(master, data_only=True)["Key Dates"]
+    wb = load_workbook(master, data_only=True)
+    ws = wb["Key Dates"]
     cols = _headers(ws)
     key_dates = []
     for row in ws.iter_rows(min_row=2, max_col=len(cols), values_only=True):
@@ -541,73 +835,125 @@ def load(folder):
                 _date(cell("Date")), _text(cell("Event")), _text(cell("Type")) or "Deadline", split_names(_text(cell("People"))),
                 _truthy(cell("Done")), _date(cell("Internal deadline")), _date(cell("End date")), _text(cell("Track")),
                 _text(cell("Competition")), _text(cell("Notes"))))
-    teams = [load_subteam(p) for p in sorted((folder / SUBTEAM_DIR).glob("*.xlsx")) if not p.name.startswith("~$")]
-    return Tracker(folder, key_dates, [t for t in teams if t], is_writable(master), master.stat().st_mtime)
+    if TEMPLATE_SHEET in wb.sheetnames or LIBRARY_SHEET in wb.sheetnames:
+        templates, library = _read_templates(wb, GENERAL), _read_library(wb, GENERAL)
+    else:  # a master from before templates: the standard gates
+        templates, library = {DEFAULT_TEMPLATE: standard_template()}, standard_library()
+    tracker = Tracker(folder, key_dates, [], is_writable(master), master.stat().st_mtime,
+                      _settings(wb).get("Car") or folder.name, library, templates)
+    for p in sorted((folder / SUBTEAM_DIR).glob("*.xlsx")):
+        if not p.name.startswith("~$"):
+            team = load_subteam(p, templates, library)
+            if team:
+                tracker.subteams.append(team)
+    return tracker
 
 
-def load_subteam(path):
+def load_subteam(path, shared=None, general_library=()):
     wb = load_workbook(path, data_only=True)
     if PLAN_SHEET not in wb.sheetnames:
         return None
     ws = wb[PLAN_SHEET]
-    fixed, gates = _plan_layout(ws)
-    renamed = dict(zip(OLD_DEFAULT_GATES, DEFAULT_GATES)) if gates == OLD_DEFAULT_GATES else {}
-    gates = [renamed.get(g, g) for g in gates]
-    after, due_before = _gate_rules(wb, gates)
-    team = Subteam(path.stem, path, gates, [], is_writable(path), path.stat().st_mtime, after=after, due_before=due_before)
+    fixed, columns = _plan_layout(ws)
+    renamed = dict(zip(OLD_DEFAULT_GATES, DEFAULT_GATES)) if columns == OLD_DEFAULT_GATES else {}
+    columns = [renamed.get(g, g) for g in columns]
+    team = Subteam(path.stem, path, [], is_writable(path), path.stat().st_mtime, shared=dict(shared or {}), columns=columns)
+    if TEMPLATE_SHEET in wb.sheetnames:
+        team.templates = _read_templates(wb, team.name)
+    elif LEGACY_GATE_SHEET in wb.sheetnames:  # one rule set for the subteam, from before templates
+        team.templates = {team.name: _legacy_template(wb, team.name, columns)}
+    elif not (shared and template_matches(shared.get(DEFAULT_TEMPLATE), columns)):
+        team.templates = {team.name: standard_template(columns, team.name, team.name)}  # its gates, in order
+    team.library = _read_library(wb, team.name)
+    team.default_template = _settings(wb).get("Default template", "")
     n = len(fixed)
-    for row in ws.iter_rows(min_row=2, max_col=n + len(gates), values_only=True):
+    for row in ws.iter_rows(min_row=2, max_col=n + len(columns), values_only=True):
         cell = lambda col: _text(row[fixed.index(col)]) if col in fixed else ""
         if not cell("Part"):
             continue
         flag = cell("Flag") or "OK"
-        cells = dict(zip(gates, row[n:]))
+        cells = dict(zip(columns, row[n:]))
         team.parts.append(Part(
             name=cell("Part"), owner=cell("Owner"), current=cell("Current Gate"), flag=flag if flag in FLAGS else "OK",
             notes=cell("Notes"), dates={g: _date(v) for g, v in cells.items()}, parent=cell("Parent"),
             assignees=split_names(cell("Assignees")), tags=split_tags(cell("Tags")),
-            skipped={g for g, v in cells.items() if _text(v).upper() in (SKIP, "NA", "SKIP")},
+            skipped={g for g, v in cells.items() if _text(v).upper() in (SKIP, "NA", "SKIP", "OFF")},
+            template=cell("Template"),
         ))
     team.actions = [Action(str(r[0]).strip(), _text(r[1]), _text(r[2]), _date(r[3]), _text(r[4]), _date(r[5]))
                     for r in _rows(wb, ACTION_SHEET, len(ACTION_COLS))]
+    team.reviews = [Review(_text(r[0]), _text(r[1]), _date(r[2]), _text(r[3]), _text(r[4]), _text(r[5]))
+                    for r in _rows(wb, REVIEW_SHEET, len(REVIEW_COLS)) if _text(r[1]) in DR_TYPES]
     by_key = {p.key: p for p in team.parts}
     for r in _rows(wb, LOG_SHEET, len(LOG_COLS)):
         part, gate = by_key.get(_text(r[0])), renamed.get(_text(r[1]), _text(r[1]))
-        if part and gate in gates:
-            part.passed[gate] = (_date(r[3]), _date(r[2]))
+        state = _text(r[4]) or DONE_STATE
+        if part and gate in template_of(team, part).gates:
+            if state == IN_PROGRESS:
+                part.started.add(gate)
+            else:
+                part.passed[gate] = (_date(r[3]), _date(r[2]))
         else:
-            team.unmatched_log.append(GatePass(_text(r[0]), gate, _date(r[2]), _date(r[3])))
+            team.unmatched_log.append(GatePass(_text(r[0]), gate, _date(r[2]), _date(r[3]), state))
     for p in team.parts:
         _passed_from_current(p, team, renamed)
+    for t in team.templates.values():
+        ensure_library(team, t, general_library)
     return team
 
 
-def _passed_from_current(part, team, renamed):
-    """Gates passed before the app logged them: everything a listed current gate comes after (or every gate, for Done).
-    This is how files edited by hand, or made by older versions, say which gates are passed."""
-    listed = [renamed.get(g.strip(), g.strip()) for g in re.split(r"[,+]", part.current) if g.strip()]
-    if DONE in listed:
-        before = team.gates
-    else:
-        before = [a for g in listed if g in team.gates for a in ancestors(team, g)]
-    for g in before:
-        if g not in part.passed and g not in part.skipped:
-            part.passed[g] = (None, part.dates.get(g))
+def template_matches(template, columns):
+    return template is not None and template.gates == list(columns)
 
 
-def _gate_rules(wb, gates):
-    """(after, due_before) from the Gates sheet, or the default linear rules when there isn't one."""
-    if GATE_SHEET not in wb.sheetnames:
-        return linear(gates), {}
-    after, due_before = {g: [] for g in gates}, {}
-    for r in _rows(wb, GATE_SHEET, len(GATE_COLS)):
+def _legacy_template(wb, name, columns):
+    after, due_before = {g: [] for g in columns}, {}
+    for r in _rows(wb, LEGACY_GATE_SHEET, 3):
         g = _text(r[0])
-        if g in gates:
-            earlier = gates[:gates.index(g)]
+        if g in columns:
+            earlier = columns[:columns.index(g)]
             after[g] = [a.strip() for a in _text(r[1]).split(",") if a.strip() in earlier]
             if _text(r[2]):
                 due_before[g] = _text(r[2])
-    return after, due_before
+    return Template(name, name, list(columns), after, due_before)
+
+
+def _read_templates(wb, designation):
+    out = {}
+    for r in _rows(wb, TEMPLATE_SHEET, len(TEMPLATE_COLS)):
+        name, gate = _text(r[0]), _text(r[2])
+        if not gate:
+            continue
+        t = out.setdefault(name, Template(name, _text(r[1]) or designation))
+        if gate not in t.gates:
+            t.gates.append(gate)
+            t.after[gate] = [a.strip() for a in _text(r[3]).split(",") if a.strip() in t.gates[:-1]]
+            if _text(r[4]):
+                t.due_before[gate] = _text(r[4])
+    return out
+
+
+def _read_library(wb, designation):
+    return [GateDef(_text(r[1]), _text(r[0]), _text(r[2]) or designation, _text(r[3]))
+            for r in _rows(wb, LIBRARY_SHEET, len(LIBRARY_COLS), key=1) if _text(r[1])]
+
+
+def _settings(wb):
+    if SETTINGS_SHEET not in wb.sheetnames:
+        return {}
+    return {_text(r[0]): _text(r[1]) for r in wb[SETTINGS_SHEET].iter_rows(min_row=1, max_col=2, values_only=True) if r and r[0]}
+
+
+def _passed_from_current(part, team, renamed):
+    """Gates done before the app logged them: everything a listed current gate comes after (or every gate, for Done).
+    This is how files edited by hand, or made by older versions, say which gates are done."""
+    t = template_of(team, part)
+    listed = [renamed.get(g.strip(), g.strip()) for g in re.split(r"[,+]", part.current) if g.strip()]
+    before = t.gates if DONE in listed else [a for g in listed if g in t.gates for a in ancestors(t, g)]
+    for g in before:
+        if g not in part.passed and g not in part.skipped:
+            part.passed[g] = (None, part.dates.get(g))
+            part.started.discard(g)
 
 
 def _headers(ws):
@@ -615,10 +961,11 @@ def _headers(ws):
     return headers[:headers.index("")] if "" in headers else headers
 
 
-def _rows(wb, sheet, width):
+def _rows(wb, sheet, width, key=0):
     if sheet not in wb.sheetnames:
         return []
-    return [list(r) + [None] * width for r in wb[sheet].iter_rows(min_row=2, max_col=width, values_only=True) if r[0]]
+    return [list(r) + [None] * width for r in wb[sheet].iter_rows(min_row=2, max_col=width, values_only=True)
+            if len(r) > key and r[key] not in (None, "")]
 
 
 def _text(v):
@@ -661,32 +1008,35 @@ def _list(ws, cells, values=None, source=None):
     ws.add_data_validation(dv)
 
 
+def _sheet(wb, name, cols, widths, note=None):
+    """Get a side sheet, creating it with a header (and an explanatory note) if it doesn't exist."""
+    if name in wb.sheetnames:
+        return wb[name]
+    ws = wb.create_sheet(name)
+    _header(ws, cols)
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    if note:
+        ws.cell(1, len(cols) + 2, note).font = Font(italic=True, color="757575")
+    ws.freeze_panes = "A2"
+    return ws
+
+
 def _ensure_side_sheets(wb):
-    """Add the Actions, Gate Log and Gates sheets to a subteam file that doesn't have them yet."""
-    if ACTION_SHEET not in wb.sheetnames:
-        ws = wb.create_sheet(ACTION_SHEET)
-        _header(ws, ACTION_COLS)
-        for col, width in zip("ABCDEF", (48, 24, 18, 12, 12, 12)):
-            ws.column_dimensions[col].width = width
-        ws.freeze_panes = "A2"
-    if LOG_SHEET not in wb.sheetnames:
-        ws = wb.create_sheet(LOG_SHEET)
+    """Add the sheets a subteam file needs, and drop the pre-template Gates sheet."""
+    _sheet(wb, ACTION_SHEET, ACTION_COLS, (48, 24, 18, 12, 12, 12))
+    ws = _sheet(wb, LOG_SHEET, LOG_COLS, (34, 24, 12, 12, 12),
+                "Written by the app: gates that are done or in progress. A blank Passed date: done before the app recorded it.")
+    if ws.cell(1, 5).value != "Status":
         _header(ws, LOG_COLS)
-        for col, width in zip("ABCD", (34, 24, 12, 12)):
-            ws.column_dimensions[col].width = width
-        ws["F1"] = "Written by the tracker app when a gate is passed. A blank Passed date: passed before the app recorded it."
-        ws["F1"].font = Font(italic=True, color="757575")
-        ws.freeze_panes = "A2"
-    if GATE_SHEET not in wb.sheetnames:
-        ws = wb.create_sheet(GATE_SHEET)
-        _header(ws, GATE_COLS)
-        for col, width in zip("ABC", (30, 50, 28)):
-            ws.column_dimensions[col].width = width
-        ws["E1"] = "After: the gates (comma-separated, earlier in the list) that must be passed or skipped first. Blank = can start any time."
-        ws["E2"] = "Due before: a key date (its Event name in Master.xlsx) this gate must be due before. The app warns if it isn't."
-        for c in ("E1", "E2"):
-            ws[c].font = Font(italic=True, color="757575")
-        ws.freeze_panes = "A2"
+    _sheet(wb, REVIEW_SHEET, REVIEW_COLS, (34, 18, 12, 18, 20, 50), "One row per assembly and review (DR1 Concept / DR2 Intermediate / DR3 Final).")
+    _sheet(wb, TEMPLATE_SHEET, TEMPLATE_COLS, (26, 16, 30, 50, 28),
+           "One row per gate, in order. After: gates (comma-separated, earlier in the template) that come first. "
+           "Due before: a key date (its Event name in Master.xlsx).")
+    _sheet(wb, LIBRARY_SHEET, LIBRARY_COLS, (10, 30, 16, 60))
+    _sheet(wb, SETTINGS_SHEET, ["Setting", "Value"], (20, 30))
+    if LEGACY_GATE_SHEET in wb.sheetnames:
+        del wb[LEGACY_GATE_SHEET]
 
 
 def _write_rows(ws, rows, width, date_cols):
@@ -700,6 +1050,22 @@ def _write_rows(ws, rows, width, date_cols):
                 c.number_format = "yyyy-mm-dd"
 
 
+def _write_settings(wb, values):
+    ws = _sheet(wb, SETTINGS_SHEET, ["Setting", "Value"], (20, 30))
+    _write_rows(ws, [[k, v] for k, v in values.items()], 2, set())
+
+
+def _write_templates(wb, templates, designation):
+    ws = _sheet(wb, TEMPLATE_SHEET, TEMPLATE_COLS, (26, 16, 30, 50, 28))
+    _write_rows(ws, [[t.name, t.designation or designation, g, ", ".join(t.after.get(g, [])), t.due_before.get(g)]
+                     for t in templates.values() for g in t.gates], len(TEMPLATE_COLS), set())
+
+
+def _write_library(wb, library):
+    ws = _sheet(wb, LIBRARY_SHEET, LIBRARY_COLS, (10, 30, 16, 60))
+    _write_rows(ws, [[g.code, g.name, g.designation, g.description] for g in library], len(LIBRARY_COLS), set())
+
+
 def _plan_sheet(wb, gates):
     """A fresh, empty Plan sheet for these gates, with headers, dropdowns and highlighting.
     Replaces the existing one, so changing the gates (or upgrading an older layout) keeps Excel's formatting right."""
@@ -709,18 +1075,18 @@ def _plan_sheet(wb, gates):
     wb.active = 0
     n = len(FIXED_COLS)
     _header(ws, FIXED_COLS + gates, [HEADER_FILL] * n + [GATE_FILL] * len(gates))
-    for letter, width in zip("ABCDEFGH", (28, 20, 18, 26, 22, 30, 10, 40)):
+    for letter, width in zip("ABCDEFGHI", (28, 20, 18, 26, 22, 22, 30, 10, 40)):
         ws.column_dimensions[letter].width = width
     col = lambda name: get_column_letter(FIXED_COLS.index(name) + 1)
     cur = col("Current Gate")
-    first, last = get_column_letter(n + 1), get_column_letter(n + len(gates))
+    first, last = get_column_letter(n + 1), get_column_letter(n + max(len(gates), 1))
     for i in range(len(gates)):
         letter = get_column_letter(n + 1 + i)
         ws.column_dimensions[letter].width = max(15, len(gates[i]) + 4)
         for r in range(2, FORMAT_ROWS + 2):
             ws[f"{letter}{r}"].number_format = "yyyy-mm-dd"
     area = f"{first}2:{last}{FORMAT_ROWS + 1}"
-    # A gate listed in Current Gate: red when overdue, yellow otherwise. Skipped gates (N/A) and finished parts: grey.
+    # A gate listed in Current Gate: red when overdue, yellow otherwise. Gates that are off (N/A) and finished parts: grey.
     listed = f'ISNUMBER(SEARCH(", "&{first}$1&",", ", "&${cur}2&","))'
     ws.conditional_formatting.add(area, FormulaRule(
         formula=[f'AND({listed},ISNUMBER({first}2),{first}2<TODAY())'],
@@ -734,8 +1100,8 @@ def _plan_sheet(wb, gates):
 
 def _plan_layout(ws):
     """(fixed columns, gates) from the Plan sheet's header row. Fixed columns are read by name, so older layouts
-    (no Parent, Assignees or Tags) still load; the gates are the named columns after the last fixed one. A fixed
-    column whose header was cleared is just ignored (and restored on the next save)."""
+    (no Parent, Assignees, Tags or Template) still load; the gates are the named columns after the last fixed one.
+    A fixed column whose header was cleared is just ignored (and restored on the next save)."""
     headers = [_text(c.value) for c in ws[1]]
     n = max((i + 1 for i, h in enumerate(headers) if h in FIXED_COLS), default=0)
     fixed, gates = headers[:n], headers[n:]
@@ -744,24 +1110,44 @@ def _plan_layout(ws):
     return fixed, gates[:gates.index("")] if "" in gates else gates
 
 
-def create_subteam_file(path, gates=DEFAULT_GATES):
-    """An empty subteam plan with headers, dropdowns and highlighting."""
+def create_subteam_file(path, gates=DEFAULT_GATES, template=None, default=""):
+    """An empty subteam plan. Its parts follow the master's templates unless `template` (its own) is given."""
     wb = Workbook()
     wb.remove(wb.active)
-    _plan_sheet(wb, gates)
+    _plan_sheet(wb, list(template.gates if template else gates))
     _ensure_side_sheets(wb)
-    _write_rows(wb[GATE_SHEET], [[g, ", ".join(a), None] for g, a in linear(gates).items()], len(GATE_COLS), set())
+    if template:
+        _write_templates(wb, {template.name: template}, template.designation)
+        _write_library(wb, [GateDef(g, auto_code(g), template.designation) for g in template.gates])
+    _write_settings(wb, {"Default template": default or (template.name if template else "")})
     _save_atomic(wb, Path(path))
 
 
-def create_master(path):
+def create_subteam(tracker, name, template_name=""):
+    """Add a subteam file to the tracker. Returns its path; refuses an existing name."""
+    name = name.strip()
+    if not name or any(c in name for c in '\\/:*?"<>|'):
+        raise ValueError("Give the sub-team a name without \\ / : * ? \" < > |.")
+    path = tracker.folder / SUBTEAM_DIR / f"{name}.xlsx"
+    if path.exists() or any(t.name.casefold() == name.casefold() for t in tracker.subteams):
+        raise ValueError(f"There's already a sub-team called {name}.")
+    available = {**tracker.templates, **{n: t for n, (t, _) in all_templates(tracker).items()}}
+    t = available.get(template_name) or tracker.templates.get(DEFAULT_TEMPLATE) or standard_template()
+    own = None if t.name in tracker.templates else Template(t.name, name, list(t.gates), dict(t.after), dict(t.due_before))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    create_subteam_file(path, t.gates, own, t.name)
+    return path
+
+
+def create_master(path, car="", library=None, templates=None, key_dates=()):
     wb = Workbook()
     ws = wb.active
     ws.title = "Key Dates"
     _key_date_sheet(ws)
+    _write_rows(ws, [_key_date_row(k) for k in sorted(key_dates, key=lambda k: k.date or date.max)], len(KEY_DATE_COLS), {1, 6, 7})
     about = wb.create_sheet("Read Me")
     for line in [
-        "Project Tracker: master file",
+        "Project Tracker: master file" + (f" for {car}" if car else ""),
         "",
         "Key Dates: competition deadlines, design reviews (gate meetings), milestones, freezes, blackouts and events.",
         "   Only the PM/captain edits this.",
@@ -769,17 +1155,22 @@ def create_master(path):
         "   Done = Yes once a deadline is submitted or a milestone is met.",
         "   Internal deadline = the team's own date ahead of the official one; the app tracks against it.",
         "   End date = last day of a blackout or an event that spans several days.",
+        "Gate Library / Gate Templates: the general gates and templates every sub-team can use (sub-teams keep their",
+        "   own in their files). Edit them in the app's Gates page.",
         "All Parts / All Actions: rebuilt by the tracker app from the subteam files. Don't edit them here.",
         "",
         "Each subteam's plan is in Subteams/<name>.xlsx, and only that subteam's lead can edit it.",
-        "In a subteam file, the gates are the columns after Notes, and each holds that gate's due date (or N/A to skip it).",
-        "Parent: blank for a top-level part; for a sub-part, the name of the part it belongs to (e.g. Front Wing).",
+        "In a subteam file, the gates are the columns after Notes, and each holds that gate's due date (or N/A when it's off).",
+        "Template: which gate template the part follows (blank = the sub-team's default).",
         "Current Gate: the gate(s) the part is working on, comma-separated, or Done.",
-        "The Gates sheet says which gates come after which (they can run in parallel) and which key date each must beat.",
     ]:
         about.append([line])
     about["A1"].font = Font(bold=True, size=14)
     about.column_dimensions["A"].width = 110
+    templates = {DEFAULT_TEMPLATE: standard_template()} if templates is None else templates
+    _write_library(wb, standard_library() if library is None else library)
+    _write_templates(wb, templates, GENERAL)
+    _write_settings(wb, {"Car": car or Path(path).parent.name})
     _save_atomic(wb, Path(path))
 
 
@@ -797,25 +1188,31 @@ def _key_date_sheet(ws):
     ws.freeze_panes = "A2"
 
 
+def _key_date_row(k):
+    return [k.date, k.event, k.type, ", ".join(k.people), "Yes" if k.done else None, k.internal, k.end, k.track, k.competition, k.notes]
+
+
 def save_subteam(team):
-    """Write the parts, actions, gate log and gate rules back to the file. Raises a SaveError subclass if it can't."""
+    """Write the parts, actions, gate log, reviews, templates and library back to the file. Raises a SaveError subclass if it can't."""
     ensure_can_save(team.path, team.mtime)
     wb = load_workbook(team.path)
     _ensure_side_sheets(wb)
-    if _plan_layout(wb[PLAN_SHEET]) != (FIXED_COLS, team.gates):
-        _plan_sheet(wb, team.gates)
-    _write_rows(
-        wb[PLAN_SHEET],
-        [[p.name, p.parent, p.owner, ", ".join(p.assignees), ", ".join(p.tags), current_gate(p, team, ", "), p.flag, p.notes]
-         + [SKIP if g in p.skipped else p.dates.get(g) for g in team.gates] for p in team.parts],
-        len(FIXED_COLS) + len(team.gates),
-        set(range(len(FIXED_COLS) + 1, len(FIXED_COLS) + len(team.gates) + 1)),
-    )
-    _write_rows(wb[ACTION_SHEET], [[a.text, a.part, a.owner, a.due, a.source, a.closed] for a in team.actions],
-                len(ACTION_COLS), {4, 6})
-    _write_rows(wb[LOG_SHEET], [[g.part, g.gate, g.due, g.passed] for g in team.log], len(LOG_COLS), {3, 4})
-    _write_rows(wb[GATE_SHEET], [[g, ", ".join(team.after.get(g, [])), team.due_before.get(g)] for g in team.gates],
-                len(GATE_COLS), set())
+    gates = team.gates
+    if _plan_layout(wb[PLAN_SHEET]) != (FIXED_COLS, gates):
+        _plan_sheet(wb, gates)
+    rows = []
+    for p in team.parts:
+        own = template_of(team, p).gates
+        rows.append([p.name, p.parent, p.owner, ", ".join(p.assignees), ", ".join(p.tags), p.template,
+                     current_gate(p, team, ", ", rollup=False), p.flag, p.notes] + [(SKIP if g in p.skipped else p.dates.get(g)) if g in own else None for g in gates])
+    _write_rows(wb[PLAN_SHEET], rows, len(FIXED_COLS) + len(gates), set(range(len(FIXED_COLS) + 1, len(FIXED_COLS) + len(gates) + 1)))
+    _write_rows(wb[ACTION_SHEET], [[a.text, a.part, a.owner, a.due, a.source, a.closed] for a in team.actions], len(ACTION_COLS), {4, 6})
+    _write_rows(wb[LOG_SHEET], [[g.part, g.gate, g.due, g.passed, g.status] for g in team.log], len(LOG_COLS), {3, 4})
+    _write_rows(wb[REVIEW_SHEET], [[r.part, r.review, r.date, r.outcome, r.presenter, r.notes] for r in team.reviews
+                                   if r.date or r.outcome or r.presenter or r.notes], len(REVIEW_COLS), {3})
+    _write_templates(wb, team.templates, team.name)
+    _write_library(wb, team.library)
+    _write_settings(wb, {"Default template": team.default_template})
     _save_atomic(wb, team.path)
     team.mtime = team.path.stat().st_mtime
 
@@ -826,10 +1223,19 @@ def save_key_dates(tracker):
     wb = load_workbook(path)
     ws = wb["Key Dates"]
     _key_date_sheet(ws)  # also upgrades a master made before the newer columns existed
-    _write_rows(ws, [[k.date, k.event, k.type, ", ".join(k.people), "Yes" if k.done else None, k.internal, k.end, k.track,
-                      k.competition, k.notes]
-                     for k in sorted(tracker.key_dates, key=lambda k: k.date or date.max)],
-                len(KEY_DATE_COLS), {1, 6, 7})
+    _write_rows(ws, [_key_date_row(k) for k in sorted(tracker.key_dates, key=lambda k: k.date or date.max)], len(KEY_DATE_COLS), {1, 6, 7})
+    _save_atomic(wb, path)
+    tracker.master_mtime = path.stat().st_mtime
+
+
+def save_master_gates(tracker):
+    """Write the general gate library and templates (and the car name) to the master."""
+    path = tracker.folder / MASTER
+    ensure_can_save(path, tracker.master_mtime)
+    wb = load_workbook(path)
+    _write_library(wb, tracker.library)
+    _write_templates(wb, tracker.templates, GENERAL)
+    _write_settings(wb, {**_settings(wb), "Car": tracker.car})
     _save_atomic(wb, path)
     tracker.master_mtime = path.stat().st_mtime
 
@@ -841,9 +1247,9 @@ def write_rollup(tracker, today=None):
     wb = load_workbook(path)
     stamp = f"Generated by the tracker app {datetime.now():%Y-%m-%d %H:%M}. Don't edit it here."
     sheets = [
-        ("All Parts", ROLLUP_COLS, (24, 28, 20, 18, 26, 22, 30, 11, 10, 9, 40), {8},
-         [[t.name, p.name, p.parent, p.owner, ", ".join(p.assignees), ", ".join(p.tags), current_gate(p, t, ", "),
-           due_date(p, t), status(p, t, today), p.flag, p.notes]
+        ("All Parts", ROLLUP_COLS, (24, 28, 20, 18, 26, 22, 22, 30, 11, 10, 9, 40), {9},
+         [[t.name, p.name, p.parent, p.owner, ", ".join(p.assignees), ", ".join(p.tags), template_of(t, p).name,
+           current_gate(p, t, ", "), due_date(p, t), status(p, t, today), p.flag, p.notes]
           for t in tracker.subteams for p in t.parts]),
         ("All Actions", ["Subteam"] + ACTION_COLS + ["Status"], (24, 48, 24, 18, 11, 10, 11, 10), {5, 7},
          [[t.name, a.text, a.part, a.owner, a.due, a.source, a.closed, action_status(a, today)]
@@ -870,3 +1276,50 @@ def key_date_days(kd, limit=62):
         return []
     end = kd.end if kd.end and kd.end >= kd.date else kd.date
     return [kd.date + timedelta(days=i) for i in range(min((end - kd.date).days + 1, limit))]
+
+
+# --------------------------------------------------------------------------- cars
+
+
+def next_car_name(name):
+    """UCR-04 -> UCR-05 (keeps the zero padding); anything else gets " (next)"."""
+    m = re.match(r"^(.*?)(\d+)$", name or "")
+    return f"{m.group(1)}{int(m.group(2)) + 1:0{len(m.group(2))}d}" if m else f"{name} (next)"
+
+
+def new_car(tracker, name, structure=True, gates=True, dates=True, shift_days=0):
+    """Start the next car's tracker next to this one, optionally carrying over the sub-teams' assembly structure
+    (parts, sub-parts, templates and tags; no dates, people or progress), the gate library and templates, and the key
+    dates (moved by `shift_days`, not done). Returns the new folder."""
+    name = name.strip()
+    if not name or any(c in name for c in '\\/:*?"<>|'):
+        raise ValueError("Give the car a name without \\ / : * ? \" < > |.")
+    dest = tracker.folder.parent / name
+    if dest.exists():
+        raise ValueError(f"{dest} already exists.")
+    shift = lambda d: d + timedelta(days=shift_days) if d else None
+    kds = [KeyDate(shift(k.date), k.event, k.type, list(k.people), False, shift(k.internal), shift(k.end), k.track, k.competition,
+                   k.notes) for k in tracker.key_dates] if dates else []
+    (dest / SUBTEAM_DIR).mkdir(parents=True)
+    try:
+        create_master(dest / MASTER, name, tracker.library if gates else None, tracker.templates if gates else None, kds)
+        shared = tracker.templates if gates else {DEFAULT_TEMPLATE: standard_template()}
+        for team in tracker.subteams:
+            path = dest / SUBTEAM_DIR / team.path.name
+            create_subteam_file(path, DEFAULT_GATES)
+            new = load_subteam(path, shared)
+            if gates:
+                new.templates = {n: Template(t.name, t.designation, list(t.gates), dict(t.after), dict(t.due_before))
+                                 for n, t in team.templates.items()}
+                new.library = [GateDef(g.name, g.code, g.designation, g.description) for g in team.library]
+                new.default_template = team.default_template
+            if structure:
+                for p in team.parts:
+                    keep = p.template if p.template in new.available() else ""
+                    new.parts.append(Part(p.name, parent=p.parent, tags=list(p.tags), template=keep))
+            save_subteam(new)
+    except Exception:
+        import shutil
+        shutil.rmtree(dest, ignore_errors=True)
+        raise
+    return dest

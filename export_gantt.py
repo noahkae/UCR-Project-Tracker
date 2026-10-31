@@ -98,11 +98,12 @@ def gate_spans(part, team):
     """(gate, start, due, lane, lanes) for every gate with a due date that isn't skipped. A bar starts at the latest due
     date of the gates it comes after; bars that overlap in time get their own lane."""
     spans = []
-    for g in team.gates:
+    tpl = core.template_of(team, part)
+    for g in tpl.gates:
         due = part.dates.get(g)
         if due is None or g in part.skipped:
             continue
-        before = [part.dates[a] for a in team.after.get(g, []) if part.dates.get(a) and a not in part.skipped]
+        before = [part.dates[a] for a in tpl.after.get(g, []) if part.dates.get(a) and a not in part.skipped]
         prev = max(before) if before else None
         start = prev if prev and prev < due else due - timedelta(days=14 if prev is None else 3)
         spans.append([g, start, due])
@@ -224,7 +225,7 @@ def chart(fig, rows, top, lo, hi, key_dates, today):
 
 
 def draw_part(ax, team, part, y, days_per_inch):
-    active = core.active_gates(part, team)
+    active = core.working_gates(part, team)
     spans = gate_spans(part, team)
     if not spans:
         ax.text(ax.get_xlim()[0], y, "  no dates yet", va="center", fontsize=7, style="italic", color=FAINT)

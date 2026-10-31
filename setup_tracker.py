@@ -20,7 +20,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--out", required=True, help="folder to create")
     ap.add_argument("--subteams", nargs="+", default=SUBTEAMS)
-    ap.add_argument("--gates", nargs="+", default=core.DEFAULT_GATES, help="gate names, in order")
+    ap.add_argument("--gates", nargs="+", default=core.DEFAULT_GATES, help="gate names of the Standard template, in order")
+    ap.add_argument("--car", help="car name, e.g. UCR-04 (default: the folder name)")
     args = ap.parse_args()
     problem = core.check_gates(args.gates)
     if problem:
@@ -30,7 +31,8 @@ def main():
     if (out / core.MASTER).exists():
         raise SystemExit(f"{out / core.MASTER} already exists; nothing was changed.")
     (out / core.SUBTEAM_DIR).mkdir(parents=True, exist_ok=True)
-    core.create_master(out / core.MASTER)
+    core.create_master(out / core.MASTER, args.car or out.name, core.standard_library(args.gates),
+                       {core.DEFAULT_TEMPLATE: core.standard_template(args.gates)})
     for name in args.subteams:
         path = out / core.SUBTEAM_DIR / f"{name}.xlsx"
         if not path.exists():
