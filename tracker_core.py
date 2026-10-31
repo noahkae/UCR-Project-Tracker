@@ -104,7 +104,7 @@ class Part:
         return f"{self.parent}{SEP}{self.name}" if self.parent else self.name
 
     def people(self):
-        return [self.owner] + self.assignees if self.owner else list(self.assignees)
+        return _unique([self.owner] + self.assignees)
 
 
 @dataclass
@@ -136,11 +136,12 @@ class Subteam:
     actions: list = field(default_factory=list)
     after: dict = field(default_factory=dict)  # gate -> gates it comes after
     due_before: dict = field(default_factory=dict)  # gate -> key date (event name) it must be due before
+    unmatched_log: list = field(default_factory=list)  # Gate Log rows for parts/gates that no longer exist (e.g. renamed in Excel)
 
     @property
     def log(self):
-        """Every gate passed, part by part (what the Gate Log sheet holds)."""
-        return [GatePass(p.key, g, *reversed(p.passed[g])) for p in self.parts for g in self.gates if g in p.passed]
+        """Every gate passed, part by part (what the Gate Log sheet holds), then any rows the app couldn't match."""
+        return [GatePass(p.key, g, *reversed(p.passed[g])) for p in self.parts for g in self.gates if g in p.passed] + self.unmatched_log
 
 
 @dataclass
@@ -197,8 +198,9 @@ def open_gates(part, team):
 
 
 def active_gates(part, team):
-    """The gates being worked on now: not passed or skipped, and everything they come after is cleared."""
-    return [g for g in open_gates(part, team) if all(cleared(part, a) for a in team.after.get(g, []) if a in team.gates)]
+    """The gates being worked on now: not passed or skipped, and everything they come after is cleared (all the way back,
+    so skipping a gate doesn't let the gates after it start before the gates before it)."""
+    return [g for g in open_gates(part, team) if all(cleared(part, a) for a in ancestors(team, g))]
 
 
 def gate_state(part, team, gate):
@@ -267,7 +269,7 @@ def descendants(team, gate):
 def rule_warnings(part, team, key_dates):
     """Problems with a part's gate dates under the subteam's gate rules (warnings, not errors)."""
     fmt = lambda d: d.strftime("%a %d %b")
-    events = {k.event.casefold(): k for k in key_dates if k.date}
+    events = {k.event.casefold(): k for k in sorted((k for k in key_dates if k.date), key=lambda k: k.date, reverse=True)}
     blackouts = [k for k in key_dates if k.type == "Blackout" and k.date]
     out = []
     for g in open_gates(part, team):
@@ -316,7 +318,17 @@ def split_names(text):
 
 
 def split_tags(text):
-    return list(dict.fromkeys(t.strip() for t in (text or "").split(",") if t.strip()))
+    return _unique(t.strip() for t in (text or "").split(","))
+
+
+def _unique(items):
+    """Non-blank items, first spelling wins, ignoring case."""
+    seen, out = set(), []
+    for x in items:
+        if x and x.casefold() not in seen:
+            seen.add(x.casefold())
+            out.append(x)
+    return out
 
 
 def is_me(name, me):
@@ -356,15 +368,15 @@ def children(team, part):
 
 
 def all_tags(team):
-    return sorted({t for p in team.parts for t in p.tags}, key=str.casefold)
+    return sorted(_unique(t for p in team.parts for t in p.tags), key=str.casefold)
 
 
 def check_part(team, part, index=None):
     """The problem with saving `part` at position `index` (None = new), or None if it's fine."""
     if not part.name:
         return "Give the part a name."
-    if SEP.strip() in part.name:
-        return f'A part name can\'t contain "{SEP.strip()}".'
+    if SEP in part.name:
+        return f'A part name can\'t contain "{SEP.strip()}" with spaces around it.'
     others = [p for i, p in enumerate(team.parts) if i != index]
     if any(p.key.casefold() == part.key.casefold() for p in others):
         return f'There\'s already a part called "{part.key}".'
@@ -563,6 +575,8 @@ def load_subteam(path):
         part, gate = by_key.get(_text(r[0])), renamed.get(_text(r[1]), _text(r[1]))
         if part and gate in gates:
             part.passed[gate] = (_date(r[3]), _date(r[2]))
+        else:
+            team.unmatched_log.append(GatePass(_text(r[0]), gate, _date(r[2]), _date(r[3])))
     for p in team.parts:
         _passed_from_current(p, team, renamed)
     return team
@@ -620,6 +634,8 @@ def _date(v):
         return v.date()
     if isinstance(v, date):
         return v
+    if isinstance(v, (int, float)) and not isinstance(v, bool) and 36526 <= v <= 73051:  # Excel serials for 2000..2099
+        return (datetime(1899, 12, 30) + timedelta(days=int(v))).date()
     if isinstance(v, str) and v.strip():
         try:
             return date.fromisoformat(v.strip()[:10])
@@ -718,10 +734,14 @@ def _plan_sheet(wb, gates):
 
 def _plan_layout(ws):
     """(fixed columns, gates) from the Plan sheet's header row. Fixed columns are read by name, so older layouts
-    (no Parent, Assignees or Tags) still load."""
-    headers = _headers(ws)
-    n = next((i for i, h in enumerate(headers) if h not in FIXED_COLS), len(headers))
-    return headers[:n], headers[n:]
+    (no Parent, Assignees or Tags) still load; the gates are the named columns after the last fixed one. A fixed
+    column whose header was cleared is just ignored (and restored on the next save)."""
+    headers = [_text(c.value) for c in ws[1]]
+    n = max((i + 1 for i, h in enumerate(headers) if h in FIXED_COLS), default=0)
+    fixed, gates = headers[:n], headers[n:]
+    if fixed and fixed[0] == "":
+        fixed[0] = "Part"  # column A is always the part name
+    return fixed, gates[:gates.index("")] if "" in gates else gates
 
 
 def create_subteam_file(path, gates=DEFAULT_GATES):

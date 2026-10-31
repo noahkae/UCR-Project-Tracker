@@ -22,6 +22,9 @@ def main():
     ap.add_argument("--subteams", nargs="+", default=SUBTEAMS)
     ap.add_argument("--gates", nargs="+", default=core.DEFAULT_GATES, help="gate names, in order")
     args = ap.parse_args()
+    problem = core.check_gates(args.gates)
+    if problem:
+        ap.error(f"--gates: {problem}")
 
     out = Path(args.out)
     if (out / core.MASTER).exists():

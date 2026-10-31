@@ -15,7 +15,7 @@ reviews in red. The Milestone key dates form the timeline in the header.
 import argparse
 import os
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 import tracker_core as core
