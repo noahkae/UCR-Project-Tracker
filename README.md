@@ -32,37 +32,38 @@ You only do this once per computer. It's Windows-first; Mac/Linux work too, see 
    * tick **"Add python.exe to PATH"**;
    * leave **"py launcher"** ticked, because double-clicking the app depends on it.
 
-**2. Get the app.** Either:
-   * `git clone <this repo's URL>`; or
-   * on the repo page, **Code → Download ZIP**, then unzip it somewhere permanent (e.g. `Documents\UCR-Project-Tracker`).
+**2. Download `UCR Project Tracker.pyzw`** from this repo's **Releases** page (right-hand side on GitHub). It's a single
+   ~75 KB file with the whole app in it. Put it somewhere permanent, e.g. `Documents`.
 
-**3. Install the dependencies.** Open the folder in File Explorer, click the address bar, type `cmd` and press Enter. Then run:
+**3. Double-click it.** The first time, it asks to install the Python packages it needs:
+   * [Flet](https://flet.dev) (the UI), [openpyxl](https://openpyxl.readthedocs.io) (the Excel files) and [matplotlib](https://matplotlib.org) (the Gantt export);
+   * click **Yes** and wait a minute or two for the progress window to finish;
+   * it then opens on its own.
 
-   ```
-   py -m pip install -r requirements.txt
-   ```
+   After that it opens straight away: centred, and with no terminal window behind it. The first start can take 10–20 seconds while Flet unpacks.
 
-   This installs [Flet](https://flet.dev) (the UI), [openpyxl](https://openpyxl.readthedocs.io) (reads and writes the Excel files)
-   and [matplotlib](https://matplotlib.org) (only used by the Gantt export).
+> **Python isn't bundled.** The `.pyzw` is Python's own single-file app format, so it needs Python installed (step 1)
+> but is otherwise self-contained. It isn't an `.exe`, so Windows doesn't show "unknown publisher" warnings for it.
 
-**4. Start it** by double-clicking **`Project Tracker.pyw`**. The window opens in the middle of the screen with no terminal behind it.
-   The first launch can take 10–20 seconds while Flet unpacks.
+> **Tip:** right-click the file → *Send to → Desktop (create shortcut)*. In the shortcut's *Properties → Change Icon* you can
+> pick `%LOCALAPPDATA%\FSAETracker\assets-…\icon.ico` (created on the first run) to give it the UCR icon.
 
-> **Mac / Linux:** run `python3 -m pip install -r requirements.txt` and then `python3 tracker_app.py`.
-> The `.pyw` double-click is Windows-only.
-
-> **Tip:** right-click `Project Tracker.pyw` → *Send to → Desktop (create shortcut)* for a desktop icon.
-> In the shortcut's *Properties → Change Icon* you can point it at `assets\icon.ico`.
+**Running from the source code instead** (for whoever maintains the app):
+* `git clone` the repo, then run `py -m pip install -r requirements.txt` in the folder.
+* Double-click **`Project Tracker.pyw`**, or run `py tracker_app.py` to see error output in the terminal.
+* Mac / Linux: `python3 -m pip install -r requirements.txt`, then `python3 tracker_app.py`.
 
 ---
 
 ## 2. One-time setup (PM / captain)
 
-**1. Create the tracker files.** From the app folder, run:
+**1. Create the tracker files.** Open a terminal in the folder holding `UCR Project Tracker.pyzw` (File Explorer → click the address bar → type `cmd` → Enter) and run:
 
    ```
-   py setup_tracker.py --out "Project Tracker"
+   py "UCR Project Tracker.pyzw" setup --out "Project Tracker"
    ```
+
+   (From the source code, `py setup_tracker.py --out "Project Tracker"` does the same.)
 
    This creates:
 
@@ -162,11 +163,13 @@ Files you can only view are synced **read-only**, so the app shows them as **Vie
 
 ### Gantt chart export (for look-backs and reports)
 
-`export_gantt.py` makes a PDF Gantt chart of the season, in the same style as the *Pit Wall* newsletter. Run it from the app folder:
+This makes a PDF Gantt chart of the season, in the same style as the *Pit Wall* newsletter. In a terminal in the folder holding the app, run:
 
 ```
-py export_gantt.py
+py "UCR Project Tracker.pyzw" gantt
 ```
+
+(From the source code: `py export_gantt.py`. Both take the same options.)
 
 It reads the tracker folder the app last used, writes `Gantt <date>.pdf` to your Downloads folder, and opens it. Options:
 
@@ -252,9 +255,9 @@ The **Plan** sheet looks like this:
 
 | Problem | Fix |
 |---|---|
-| Double-clicking the `.pyw` opens an editor | Right-click → *Open with* → *Choose another app* → **Python** (the one with the rocket icon, `pyw.exe`) → *Always*. Or reinstall Python with "py launcher" ticked. |
-| A message says a package is missing | Run `py -m pip install -r requirements.txt` in the app folder. |
-| Nothing happens on double-click | Run `py tracker_app.py` from a terminal in the app folder to see the error. |
+| Double-clicking the `.pyzw` opens an editor or asks what to open it with | Right-click → *Open with* → *Choose another app* → **Python** (the one with the rocket icon, `pyw.exe`) → *Always*. Or reinstall Python with "py launcher" ticked. |
+| Installing the packages fails | You need internet access the first time. In a terminal, run `py -m pip install flet openpyxl matplotlib`, then double-click again. |
+| Nothing happens on double-click | In a terminal, run `py "UCR Project Tracker.pyzw"` to see the error. |
 | "… is open in Excel" | Close the file in Excel and save again. |
 | "… was changed by someone else" | Someone saved it at the same time. The app reloaded the file, so make your edit again. |
 | "… is view-only for you" | You don't have Edit access on SharePoint. Ask the PM. |
@@ -267,7 +270,9 @@ The **Plan** sheet looks like this:
 
 | File | What it is |
 |---|---|
-| `Project Tracker.pyw` | Double-click launcher (no terminal) |
+| `Project Tracker.pyw` | Double-click launcher when running from the source code (no terminal) |
+| `launcher.py` | Shared start-up: offers to install missing packages, then runs the app, `gantt` or `setup` |
+| `build_dist.py` | Builds the single file `dist/UCR Project Tracker.pyzw` |
 | `tracker_app.py` | The app (Flet UI) |
 | `tracker_core.py` | Reads and writes the Excel files, status rules, save safety. No UI code. |
 | `setup_tracker.py` | Creates an empty tracker folder |
@@ -276,3 +281,9 @@ The **Plan** sheet looks like this:
 | `assets/` | App icon (`icon.svg` source, `icon.ico` with a native render per size) and the full UCR logo (`logo.svg`, `logo.png`) used in the Gantt header |
 
 The tracker data (`Project Tracker/`) is **not** in this repo. It lives on SharePoint and contains members' names.
+
+### Releasing a new version
+
+1. Run `py build_dist.py`. It writes `dist/UCR Project Tracker.pyzw`; the `dist/` folder isn't committed.
+2. On GitHub: **Releases → Draft a new release**. Create a tag such as `v1.1` and drag the `.pyzw` file into the release.
+3. Publish it, then tell members to download the new file and replace their old one. Their settings are kept.

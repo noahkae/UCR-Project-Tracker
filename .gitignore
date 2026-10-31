@@ -9,3 +9,6 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Built single-file app (share via GitHub Releases)
+dist/
