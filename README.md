@@ -156,6 +156,9 @@ undoes the change and reloads.
   Renamed gates keep their due dates and history. Removing a gate deletes its due dates, and parts that were at it move
   to the next gate they haven't passed. The app rebuilds the Plan sheet so Excel's dropdown and highlighting match.
 * **Add part** (bottom-right button): give it a name and owner, then fill in a **due date for each gate**.
+* **Sub-parts:** to keep big assemblies tidy, open a part (e.g. Front Wing) and click **Add sub-part**, or set *Sub-part of*
+  when editing. Parts with sub-parts show collapsed with a summary ("8 sub-parts · 1 need attention"); click the arrow to
+  expand. An assembly sorts by its worst sub-part, so problems still float to the top. Sub-parts go one level deep.
 * **Click a part** to edit it:
   * **Gate passed** moves the part to its next gate (after the last gate it becomes *Done*). When you save, the app
     records the date the gate was passed in the part's **gate history** and works out whether it was early or late.
@@ -249,11 +252,14 @@ The master's **Key Dates** sheet is `Date | Event | Type | People | Done`.
 
 The **Plan** sheet looks like this:
 
-| Part | Owner | Current Gate | Flag | Notes | DR01 - Concept | DR02 - Detailed Design | DR03 - Final Design | Manufacturing | Testing |
-|---|---|---|---|---|---|---|---|---|---|
-| Front Wing | Sam | DR02 - Detailed Design | OK | | 2026-10-11 | 2026-10-28 | 2026-11-10 | 2026-11-30 | 2026-12-20 |
+| Part | Parent | Owner | Current Gate | Flag | Notes | DR01 - Concept | DR02 - Detailed Design | DR03 - Final Design | Manufacturing | Testing |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Front Wing | | Sam | DR02 - Detailed Design | OK | | 2026-10-11 | 2026-10-28 | 2026-11-10 | 2026-11-30 | 2026-12-20 |
+| Element 1 | Front Wing | Alex | DR01 - Concept | OK | | 2026-10-04 | 2026-10-25 | 2026-11-08 | 2026-11-28 | 2026-12-18 |
 
-* *Current Gate* and *Flag* are dropdowns.
+* *Current Gate*, *Flag* and *Parent* are dropdowns. *Parent* is blank for a top-level part; for a sub-part it's the
+  name of the part it belongs to. Files made before sub-parts existed get the *Parent* column the next time the app saves them.
+* The **Actions** and **Gate Log** sheets refer to a sub-part by its full name, e.g. `Front Wing / Element 1`.
 * The gate columns hold due dates. Excel greys out passed gates, highlights the current one, and turns it red when overdue.
 
 ---

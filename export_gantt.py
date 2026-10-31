@@ -67,7 +67,9 @@ def build_rows(tracker, only):
         if only and team.name.casefold() not in only:
             continue
         rows.append(("team", team, None))
-        rows += [("part", team, p) for p in team.parts] or [("empty", team, None)]
+        nested = {id(c) for p in team.parts for c in core.children(team, p)}
+        ordered = [x for p in team.parts if id(p) not in nested for x in [p] + core.children(team, p)]  # sub-parts under their parent
+        rows += [("part", team, p) for p in ordered] or [("empty", team, None)]
     return rows
 
 
@@ -109,7 +111,7 @@ def date_range(tracker, rows, start, end):
     for kind, team, part in rows:
         if kind == "part":
             dates += [s for _, s, _ in gate_spans(part, team.gates)] + [d for d in part.dates.values() if d]
-            dates += [e.passed for e in team.log if e.part == part.name]
+            dates += [e.passed for e in team.log if e.part == part.key]
     dates.append(date.today())
     lo = start or min(dates) - timedelta(days=7)
     hi = end or max(dates) + timedelta(days=10)
@@ -193,7 +195,8 @@ def chart(fig, rows, top, lo, hi, key_dates, today):
             ax.text(-LABEL_W / width, y, "no parts yet", transform=ax.get_yaxis_transform(), ha="left", va="center",
                     fontsize=8, style="italic", color=MUTED, clip_on=False)
             continue
-        label = part.name if len(part.name) <= 30 else part.name[:29] + "…"
+        name = f"  └ {part.name}" if part.parent else part.name
+        label = name if len(name) <= 30 else name[:29] + "…"
         ax.text(-LABEL_W / width, y, label, transform=ax.get_yaxis_transform(), ha="left", va="center", fontsize=8.5, color=FG, clip_on=False)
         if part.owner:
             ax.text(-0.012, y, part.owner, transform=ax.get_yaxis_transform(), ha="right", va="center", fontsize=7, color=MUTED, clip_on=False)
@@ -231,7 +234,7 @@ def draw_part(ax, team, part, y, days_per_inch):
         if name:
             ax.text((x0 + x1) / 2, y, name, ha="center", va="center", fontsize=6.5, color=text, zorder=4, clip_on=True)
     for e in team.log:
-        if e.part != part.name or not e.passed:
+        if e.part != part.key or not e.passed:
             continue
         late = bool(e.due and e.passed > e.due)
         px, top = mdates.date2num(e.passed), y - 0.3  # sit on the bar's top edge so gate names stay readable

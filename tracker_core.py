@@ -38,7 +38,9 @@ SHAREPOINT_FOLDER = Path("UCalgary-Racing - Documents") / "Project Management"  
 PLAN_SHEET = "Plan"
 ACTION_SHEET = "Actions"
 LOG_SHEET = "Gate Log"
-FIXED_COLS = ["Part", "Owner", "Current Gate", "Flag", "Notes"]
+FIXED_COLS = ["Part", "Parent", "Owner", "Current Gate", "Flag", "Notes"]
+LEGACY_FIXED_COLS = ["Part", "Owner", "Current Gate", "Flag", "Notes"]  # files made before sub-parts; upgraded on save
+SEP = " / "  # a sub-part's full name is "Parent / Part"
 ACTION_COLS = ["Action", "Part", "Owner", "Due", "From", "Closed"]
 LOG_COLS = ["Part", "Gate", "Due", "Passed"]
 DEFAULT_GATES = ["DR01 - Concept", "DR02 - Detailed Design", "DR03 - Final Design", "Manufacturing", "Testing"]
@@ -48,7 +50,7 @@ FLAGS = ["OK", "At risk", "Blocked"]
 DONE = "Done"
 KEY_DATE_COLS = ["Date", "Event", "Type", "People", "Done"]
 KEY_DATE_TYPES = ["Deadline", "Design Review", "Milestone"]
-ROLLUP_COLS = ["Subteam", "Part", "Owner", "Current Gate", "Due", "Status", "Flag", "Notes"]
+ROLLUP_COLS = ["Subteam", "Part", "Parent", "Owner", "Current Gate", "Due", "Status", "Flag", "Notes"]
 DUE_SOON_DAYS = 7
 FORMAT_ROWS = 300  # rows that get dropdowns / highlighting in the Excel files
 
@@ -82,6 +84,12 @@ class Part:
     flag: str = "OK"
     notes: str = ""
     dates: dict = field(default_factory=dict)  # gate -> date | None
+    parent: str = ""  # name of the part this is a sub-part of (one level only), or ""
+
+    @property
+    def key(self):
+        """What the Actions and Gate Log sheets call this part: "Front Wing / Element 1" for a sub-part."""
+        return f"{self.parent}{SEP}{self.name}" if self.parent else self.name
 
 
 @dataclass
@@ -210,27 +218,63 @@ def record_part_change(team, old, new, today=None):
     """Keep the Gate Log and Actions in step with an edited part.
 
     Moving the current gate forward logs each gate passed today; moving it back
-    removes those log entries. Renaming a part renames it in the log and actions.
+    removes those log entries. Renaming a part (or moving it under another part) renames it in the log
+    and actions; renaming a parent does the same for its sub-parts.
     """
     today = today or date.today()
     if old is None:
         return
-    if old.name != new.name:
-        for entry in team.log:
-            if entry.part == old.name:
-                entry.part = new.name
-        for action in team.actions:
-            if action.part == old.name:
-                action.part = new.name
+    _rename_refs(team, old.key, new.key)
+    if old.name != new.name and not old.parent:
+        for child in children(team, old):
+            before = child.key
+            child.parent = new.name
+            _rename_refs(team, before, child.key)
     index = lambda p: len(team.gates) if current_gate(p, team.gates) == DONE else team.gates.index(current_gate(p, team.gates))
     before, after = index(old), index(new)
     if after > before:
         for gate in team.gates[before:after]:
-            team.log = [e for e in team.log if not (e.part == new.name and e.gate == gate)]
-            team.log.append(GatePass(new.name, gate, new.dates.get(gate), today))
+            team.log = [e for e in team.log if not (e.part == new.key and e.gate == gate)]
+            team.log.append(GatePass(new.key, gate, new.dates.get(gate), today))
     elif after < before:
         undone = set(team.gates[after:before])
-        team.log = [e for e in team.log if not (e.part == new.name and e.gate in undone)]
+        team.log = [e for e in team.log if not (e.part == new.key and e.gate in undone)]
+
+
+def _rename_refs(team, old_key, new_key):
+    if old_key == new_key:
+        return
+    for entry in team.log:
+        if entry.part == old_key:
+            entry.part = new_key
+    for action in team.actions:
+        if action.part == old_key:
+            action.part = new_key
+
+
+def children(team, part):
+    """The sub-parts of a top-level part."""
+    return [p for p in team.parts if p.parent and p.parent == part.name] if not part.parent else []
+
+
+def check_part(team, part, index=None):
+    """The problem with saving `part` at position `index` (None = new), or None if it's fine."""
+    if not part.name:
+        return "Give the part a name."
+    if SEP.strip() in part.name:
+        return f'A part name can\'t contain "{SEP.strip()}".'
+    others = [p for i, p in enumerate(team.parts) if i != index]
+    if any(p.key.casefold() == part.key.casefold() for p in others):
+        return f'There\'s already a part called "{part.key}".'
+    if part.parent:
+        old = team.parts[index] if index is not None else None
+        if part.parent == part.name or (old and part.parent == old.name):
+            return "A part can't be its own parent."
+        if not any(p.name == part.parent and not p.parent for p in others):
+            return f'"{part.parent}" isn\'t a top-level part.'
+        if old and children(team, old):
+            return f"{old.name} has sub-parts, so it can't be a sub-part itself."
+    return None
 
 
 def check_gates(names):
@@ -390,22 +434,24 @@ def load_subteam(path):
     if PLAN_SHEET not in wb.sheetnames:
         return None
     ws = wb[PLAN_SHEET]
-    gates = _gate_headers(ws)
+    fixed, gates = _plan_layout(ws)
     renamed = dict(zip(OLD_DEFAULT_GATES, DEFAULT_GATES)) if gates == OLD_DEFAULT_GATES else {}
     gates = [renamed.get(g, g) for g in gates]
     parts = []
-    n = len(FIXED_COLS)
+    n = len(fixed)
     for row in ws.iter_rows(min_row=2, max_col=n + len(gates), values_only=True):
-        if not row[0]:
+        cell = lambda col: _text(row[fixed.index(col)]) if col in fixed else ""
+        if not cell("Part"):
             continue
-        flag = str(row[3] or "OK").strip()
+        flag = cell("Flag") or "OK"
         parts.append(Part(
-            name=str(row[0]).strip(),
-            owner=str(row[1] or "").strip(),
-            current=renamed.get(str(row[2] or "").strip(), str(row[2] or "").strip()),
+            name=cell("Part"),
+            owner=cell("Owner"),
+            current=renamed.get(cell("Current Gate"), cell("Current Gate")),
             flag=flag if flag in FLAGS else "OK",
-            notes=str(row[4] or "").strip(),
+            notes=cell("Notes"),
             dates={g: _date(row[n + i]) for i, g in enumerate(gates)},
+            parent=cell("Parent"),
         ))
     actions = [
         Action(str(r[0]).strip(), _text(r[1]), _text(r[2]), _date(r[3]), _text(r[4]), _date(r[5]))
@@ -499,8 +545,10 @@ def _plan_sheet(wb, gates):
     wb.active = 0
     n = len(FIXED_COLS)
     _header(ws, FIXED_COLS + gates, [HEADER_FILL] * n + [GATE_FILL] * len(gates))
-    for col, width in zip("ABCDE", (28, 18, 16, 10, 40)):
-        ws.column_dimensions[col].width = width
+    for letter, width in zip("ABCDEF", (28, 20, 18, 22, 10, 40)):
+        ws.column_dimensions[letter].width = width
+    col = lambda name: get_column_letter(FIXED_COLS.index(name) + 1)
+    cur = col("Current Gate")
     first, last = get_column_letter(n + 1), get_column_letter(n + len(gates))
     for i in range(len(gates)):
         letter = get_column_letter(n + 1 + i)
@@ -510,21 +558,24 @@ def _plan_sheet(wb, gates):
     area = f"{first}2:{last}{FORMAT_ROWS + 1}"
     # The current gate's date: red when overdue, yellow otherwise. Gates to its left are done: grey.
     ws.conditional_formatting.add(area, FormulaRule(
-        formula=[f'AND({first}$1=$C2,{first}2<>"",{first}2<TODAY())'],
+        formula=[f'AND({first}$1=${cur}2,{first}2<>"",{first}2<TODAY())'],
         fill=PatternFill("solid", fgColor="F9DEDC"), font=Font(bold=True, color="8C1D18")))
     ws.conditional_formatting.add(area, FormulaRule(
-        formula=[f"{first}$1=$C2"], fill=PatternFill("solid", fgColor="FFF3C4"), font=Font(bold=True)))
+        formula=[f"{first}$1=${cur}2"], fill=PatternFill("solid", fgColor="FFF3C4"), font=Font(bold=True)))
     ws.conditional_formatting.add(area, FormulaRule(
-        formula=[f'OR($C2="{DONE}",IFERROR(COLUMN({first}2)<MATCH($C2,$1:$1,0),FALSE))'], font=Font(color="9E9E9E")))
-    _list(ws, f"C2:C{FORMAT_ROWS + 1}", gates + [DONE])
-    _list(ws, f"D2:D{FORMAT_ROWS + 1}", FLAGS)
+        formula=[f'OR(${cur}2="{DONE}",IFERROR(COLUMN({first}2)<MATCH(${cur}2,$1:$1,0),FALSE))'], font=Font(color="9E9E9E")))
+    _list(ws, f"{cur}2:{cur}{FORMAT_ROWS + 1}", gates + [DONE])
+    _list(ws, f"{col('Flag')}2:{col('Flag')}{FORMAT_ROWS + 1}", FLAGS)
+    _list(ws, f"{col('Parent')}2:{col('Parent')}{FORMAT_ROWS + 1}", source=f"=$A$2:$A${FORMAT_ROWS + 1}")
     ws.freeze_panes = "B2"
 
 
-def _gate_headers(ws):
-    n = len(FIXED_COLS)
-    headers = [str(c.value).strip() if c.value is not None else "" for c in ws[1]][n:]
-    return headers[:headers.index("")] if "" in headers else headers
+def _plan_layout(ws):
+    """(fixed columns, gates) from the Plan sheet's header row; older files have no Parent column."""
+    headers = [str(c.value).strip() if c.value is not None else "" for c in ws[1]]
+    fixed = FIXED_COLS if headers[:len(FIXED_COLS)] == FIXED_COLS else LEGACY_FIXED_COLS
+    gates = headers[len(fixed):]
+    return fixed, gates[:gates.index("")] if "" in gates else gates
 
 
 def create_subteam_file(path, gates=DEFAULT_GATES):
@@ -559,6 +610,7 @@ def create_master(path):
         "",
         "Each subteam's plan is in Subteams/<name>.xlsx, and only that subteam's lead can edit it.",
         "In a subteam file, the gates are the columns after Notes, in order, and each holds that gate's due date.",
+        "Parent: blank for a top-level part; for a sub-part, the name of the part it belongs to (e.g. Front Wing).",
         "'Current Gate' is the gate the part is working towards, so every gate to its left is done.",
         "Set Current Gate to Done when the part is finished. Flag a part 'At risk' or 'Blocked' to raise it at the next meeting.",
     ]:
@@ -573,11 +625,11 @@ def save_subteam(team):
     ensure_can_save(team.path, team.mtime)
     wb = load_workbook(team.path)
     _ensure_side_sheets(wb)
-    if _gate_headers(wb[PLAN_SHEET]) != team.gates:
+    if _plan_layout(wb[PLAN_SHEET]) != (FIXED_COLS, team.gates):
         _plan_sheet(wb, team.gates)
     _write_rows(
         wb[PLAN_SHEET],
-        [[p.name, p.owner, p.current, p.flag, p.notes] + [p.dates.get(g) for g in team.gates] for p in team.parts],
+        [[p.name, p.parent, p.owner, p.current, p.flag, p.notes] + [p.dates.get(g) for g in team.gates] for p in team.parts],
         len(FIXED_COLS) + len(team.gates),
         set(range(len(FIXED_COLS) + 1, len(FIXED_COLS) + len(team.gates) + 1)),
     )
@@ -609,8 +661,9 @@ def write_rollup(tracker, today=None):
     wb = load_workbook(path)
     stamp = f"Generated by the tracker app {datetime.now():%Y-%m-%d %H:%M}. Don't edit it here."
     sheets = [
-        ("All Parts", ROLLUP_COLS, (24, 28, 18, 16, 11, 10, 9, 40), {5},
-         [[t.name, p.name, p.owner, current_gate(p, t.gates), due_date(p, t.gates), status(p, t.gates, today), p.flag, p.notes]
+        ("All Parts", ROLLUP_COLS, (24, 28, 20, 18, 16, 11, 10, 9, 40), {6},
+         [[t.name, p.name, p.parent, p.owner, current_gate(p, t.gates), due_date(p, t.gates), status(p, t.gates, today), p.flag,
+           p.notes]
           for t in tracker.subteams for p in t.parts]),
         ("All Actions", ["Subteam"] + ACTION_COLS + ["Status"], (24, 48, 24, 18, 11, 10, 11, 10), {5, 7},
          [[t.name, a.text, a.part, a.owner, a.due, a.source, a.closed, action_status(a, today)]
