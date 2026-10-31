@@ -1,0 +1,11 @@
+# Tracker data lives on SharePoint (it has members' names) - never commit it
+Project Tracker/
+*.xlsx
+~$*
+*.tmp
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
