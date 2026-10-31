@@ -32,19 +32,69 @@ SUBTEAM_EMOJI = {  # matched against the start of the subteam's file name
 
 STATUS_COLOURS = {  # status -> (container colour, text colour)
     "Late": (ft.Colors.ERROR_CONTAINER, ft.Colors.ON_ERROR_CONTAINER),
-    "Due soon": (ft.Colors.AMBER_100, ft.Colors.AMBER_900),
-    "On track": (ft.Colors.GREEN_100, ft.Colors.GREEN_900),
+    "Due soon": None,  # amber / green ones depend on light or dark: see STATUS_TONES
+    "On track": None,
     "Done": (ft.Colors.SURFACE_CONTAINER_HIGHEST, ft.Colors.ON_SURFACE_VARIANT),
     "Held": (ft.Colors.SURFACE_CONTAINER_HIGHEST, ft.Colors.ON_SURFACE_VARIANT),
     "No date": (ft.Colors.SURFACE_CONTAINER_HIGHEST, ft.Colors.ON_SURFACE_VARIANT),
-    "At risk": (ft.Colors.AMBER_100, ft.Colors.AMBER_900),
+    "At risk": None,
     "Blocked": (ft.Colors.ERROR_CONTAINER, ft.Colors.ON_ERROR_CONTAINER),
     "You": (ft.Colors.PRIMARY_CONTAINER, ft.Colors.ON_PRIMARY_CONTAINER),
 }
+STATUS_TONES = {
+    "dark": {"amber": ("#3D3112", "#FFD77A"), "green": ("#16331F", "#8FDCA5")},
+    "light": {"amber": (ft.Colors.AMBER_100, ft.Colors.AMBER_900), "green": (ft.Colors.GREEN_100, ft.Colors.GREEN_900)},
+}
+
+
+def use_mode(dark):
+    tones = STATUS_TONES["dark" if dark else "light"]
+    STATUS_COLOURS.update({"Due soon": tones["amber"], "At risk": tones["amber"], "On track": tones["green"]})
+
+
 CALENDAR_COLOURS = {  # calendar-only keys: gates still to come, and upcoming design reviews
     "Future": (ft.Colors.SECONDARY_CONTAINER, ft.Colors.ON_SECONDARY_CONTAINER),
     "Review": (ft.Colors.TERTIARY_CONTAINER, ft.Colors.ON_TERTIARY_CONTAINER),
 }
+# Team look, from the Pit Wall newsletter and the Gantt export: near-black, red, warm grey, Arial.
+# Pure brand red (#FF0000) stays in the logo; text and icons use Google's softer reds (dark #F28B82, light #C5221F),
+# per Material's advice to avoid saturated colours for text on dark surfaces. Both pass WCAG AA on their backgrounds.
+FONT = "Arial"
+PALETTE = {
+    "dark": dict(
+        primary="#F28B82", on_primary="#601410", primary_container="#5A0B0B", on_primary_container="#FFDAD5",
+        secondary="#D3C8C7", on_secondary="#171717", secondary_container="#2E2B2B", on_secondary_container="#F2ECEB",
+        tertiary="#D3C8C7", on_tertiary="#171717", tertiary_container="#4A2222", on_tertiary_container="#FFDAD5",
+        error="#F28B82", on_error="#601410", error_container="#5A0B0B", on_error_container="#FFDAD5",
+        surface="#171717", on_surface="#FFFFFF", on_surface_variant="#D3C8C7", outline="#5C5656", outline_variant="#2C2C2C",
+        surface_container_lowest="#121212", surface_container_low="#1C1C1C", surface_container="#202020",
+        surface_container_high="#262626", surface_container_highest="#2E2E2E", surface_tint="#171717",
+        inverse_surface="#F2ECEB", on_inverse_surface="#171717",
+    ),
+    "light": dict(
+        primary="#C5221F", on_primary="#FFFFFF", primary_container="#FCE8E6", on_primary_container="#410000",
+        secondary="#5C5656", on_secondary="#FFFFFF", secondary_container="#ECE6E5", on_secondary_container="#171717",
+        tertiary="#5C5656", on_tertiary="#FFFFFF", tertiary_container="#F6DCD8", on_tertiary_container="#410000",
+        error="#C5221F", on_error="#FFFFFF", error_container="#FCE8E6", on_error_container="#410002",
+        surface="#FFFFFF", on_surface="#171717", on_surface_variant="#5C5656", outline="#8C8483", outline_variant="#E3DCDB",
+        surface_container_lowest="#FFFFFF", surface_container_low="#FAF8F8", surface_container="#F5F2F2",
+        surface_container_high="#EFEBEB", surface_container_highest="#E8E3E2", surface_tint="#FFFFFF",
+        inverse_surface="#171717", on_inverse_surface="#FFFFFF",
+    ),
+}
+
+
+def team_theme(mode):
+    """Material 3, coloured with the team palette instead of a generated one."""
+    p = PALETTE[mode]
+    return ft.Theme(
+        use_material3=True, font_family=FONT, color_scheme=ft.ColorScheme(**p), scaffold_bgcolor=p["surface"],
+        navigation_rail_theme=ft.NavigationRailTheme(bgcolor=p["surface"], indicator_color=p["primary_container"]),
+        card_theme=ft.CardTheme(color=p["surface_container_low"], shadow_color=ft.Colors.TRANSPARENT),
+        divider_color=p["outline_variant"],
+    )
+
+
 TYPE_ICONS = {"Deadline": ft.Icons.FLAG_OUTLINED, "Design Review": ft.Icons.GROUPS_OUTLINED, "Milestone": ft.Icons.EMOJI_EVENTS_OUTLINED}
 
 
@@ -73,14 +123,15 @@ def pills(*items):
 
 
 def heading(text, sub=None):
-    controls = [ft.Text(text, theme_style=ft.TextThemeStyle.HEADLINE_SMALL, weight=ft.FontWeight.W_600)]
+    controls = [ft.Text(text, theme_style=ft.TextThemeStyle.HEADLINE_MEDIUM, weight=ft.FontWeight.W_800)]
     if sub:
         controls.append(ft.Text(sub, color=ft.Colors.ON_SURFACE_VARIANT))
     return ft.Column(controls, spacing=2)
 
 
 def section(title, body, trailing=None):
-    head = ft.Row([ft.Text(title, theme_style=ft.TextThemeStyle.TITLE_MEDIUM, weight=ft.FontWeight.W_600)] + ([trailing] if trailing else []),
+    head = ft.Row([ft.Text(title, theme_style=ft.TextThemeStyle.TITLE_MEDIUM, weight=ft.FontWeight.W_700, color=ft.Colors.PRIMARY)]
+                  + ([trailing] if trailing else []),
                   alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
     return ft.Card(ft.Container(ft.Column([head, body], spacing=8), padding=16), variant=ft.CardVariant.OUTLINED)
 
@@ -97,7 +148,7 @@ def gate_dots(part, gates):
     dots = []
     for i, g in enumerate(gates):
         if i < passed:
-            colour, border = ft.Colors.PRIMARY, None
+            colour, border = ft.Colors.ON_SURFACE, None
         elif g == current:
             colour = STATUS_COLOURS.get(st, STATUS_COLOURS["No date"])[0]
             border = ft.Border.all(2, ft.Colors.PRIMARY)
@@ -130,6 +181,8 @@ class TrackerApp:
         self.cal_month = date.today().replace(day=1)
         self.rail = ft.NavigationRail(
             label_type=ft.NavigationRailLabelType.ALL, min_width=96, group_alignment=-0.9, scrollable=True, on_change=self.on_nav,
+            leading=ft.Container(ft.Image(src="icon.png", width=36, height=36, border_radius=5), padding=ft.Padding.only(top=8),
+                                 tooltip="UCalgary Racing"),
             trailing=ft.Column([
                 ft.IconButton(ft.Icons.REFRESH, tooltip="Reload files", on_click=lambda e: self.reload()),
                 ft.IconButton(ft.Icons.DARK_MODE_OUTLINED, tooltip="Light / dark", on_click=self.toggle_theme),
@@ -207,10 +260,11 @@ class TrackerApp:
     def toggle_theme(self, e):
         dark = self.page.theme_mode != ft.ThemeMode.DARK
         self.page.theme_mode = ft.ThemeMode.DARK if dark else ft.ThemeMode.LIGHT
+        use_mode(dark)
         cfg = load_config()
         cfg["dark"] = dark
         save_config(cfg)
-        self.page.update()
+        self.show(self.view)
 
     def toast(self, text, error=False):
         self.page.show_dialog(ft.SnackBar(
@@ -226,7 +280,7 @@ class TrackerApp:
         sub = (f"{team.name} · " if show_team else "") + sub + (f" · {part.owner}" if part.owner else "") + (f"\n{part.notes}" if part.notes else "")
         return ft.ListTile(
             leading=ft.Icon(ft.Icons.BLOCK if part.flag == "Blocked" else ft.Icons.PRECISION_MANUFACTURING_OUTLINED,
-                            color=ft.Colors.ERROR if core.needs_attention(part, team.gates, today) else ft.Colors.PRIMARY),
+                            color=ft.Colors.ERROR if core.needs_attention(part, team.gates, today) else ft.Colors.ON_SURFACE_VARIANT),
             title=ft.Text(part.name), subtitle=ft.Text(sub),
             trailing=pills((part.flag, None) if part.flag != "OK" else None, (core.status(part, team.gates, today), None)),
             on_click=lambda e: self.edit_part(team, index),
@@ -256,7 +310,7 @@ class TrackerApp:
         index = self.tracker.key_dates.index(kd)
         return ft.ListTile(
             leading=ft.Icon(TYPE_ICONS.get(kd.type, ft.Icons.EVENT),
-                            color=ft.Colors.ERROR if st == "Late" else (ft.Colors.OUTLINE if st in ("Done", "Held") else ft.Colors.PRIMARY)),
+                            color=ft.Colors.ERROR if st == "Late" else (ft.Colors.OUTLINE if st in ("Done", "Held") else ft.Colors.ON_SURFACE_VARIANT)),
             title=ft.Text(kd.event, color=ft.Colors.ON_SURFACE_VARIANT if st in ("Done", "Held") else None),
             subtitle=ft.Text(sub),
             trailing=pills(("You", "You") if mine else None, (label, st)),
@@ -304,7 +358,8 @@ class TrackerApp:
                                     color=ft.Colors.ON_SURFACE_VARIANT, tooltip="You can edit" if t.writable else "View only")]),
                     ft.Text(f"{plural(len(t.parts), 'part')} · {stats['Done']} done · {plural(sum(a.closed is None for a in t.actions), 'open action')}",
                             color=ft.Colors.ON_SURFACE_VARIANT, size=13),
-                    ft.ProgressBar(value=passed / total, bar_height=6, border_radius=3),
+                    ft.ProgressBar(value=passed / total, bar_height=6, border_radius=3, color=ft.Colors.ON_SURFACE,
+                                   bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST),
                     ft.Row(chips, wrap=True, spacing=6),
                 ], spacing=10), padding=16, ink=True, on_click=lambda e, n=t.name: self.show(n)), variant=ft.CardVariant.FILLED),
                 col={"xs": 12, "sm": 6, "lg": 4},
@@ -324,7 +379,7 @@ class TrackerApp:
         if next_review:
             sub += f"  ·  Next design review: {next_review.event}, {fmt(next_review.date)}"
         upcoming_rows = [
-            ft.ListTile(leading=ft.Icon(icon, color=ft.Colors.PRIMARY), title=ft.Text(title),
+            ft.ListTile(leading=ft.Icon(icon, color=ft.Colors.ON_SURFACE_VARIANT), title=ft.Text(title),
                         subtitle=ft.Text(f"{fmt(d)} · {sub_}"), dense=True, on_click=lambda e, v=view: self.show(v))
             for d, icon, title, sub_, view in upcoming
         ]
@@ -969,10 +1024,10 @@ def setup_screen(page, on_open, on_cancel=None):
 
 def main(page: ft.Page, folder=None, start=None):
     page.title = "Project Tracker"
-    page.theme = ft.Theme(color_scheme_seed=ft.Colors.INDIGO, use_material3=True)
-    page.dark_theme = ft.Theme(color_scheme_seed=ft.Colors.INDIGO, use_material3=True)
+    page.theme, page.dark_theme = team_theme("light"), team_theme("dark")
     cfg = load_config()
-    page.theme_mode = ft.ThemeMode.DARK if cfg.get("dark") else ft.ThemeMode.LIGHT
+    page.theme_mode = ft.ThemeMode.DARK if cfg.get("dark", True) else ft.ThemeMode.LIGHT  # dark by default, like the documents
+    use_mode(page.theme_mode == ft.ThemeMode.DARK)
     page.padding = 0
     page.window.icon = str(ASSETS / "icon.ico")
     threading.Thread(target=sharpen_window_icon, args=(page.title, ASSETS / "icon.ico"), daemon=True).start()

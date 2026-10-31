@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 FILES = [
     "launcher.py", "tracker_app.py", "tracker_core.py", "export_gantt.py", "setup_tracker.py",
-    "requirements.txt", "assets/icon.ico", "assets/logo.png",
+    "requirements.txt", "assets/icon.ico", "assets/icon.png", "assets/logo.png",
 ]
 OUT = ROOT / "dist" / "UCR Project Tracker.pyzw"
 
