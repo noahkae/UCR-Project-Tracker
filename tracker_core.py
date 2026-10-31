@@ -14,10 +14,11 @@ A subteam file has three sheets:
     Actions    follow-ups from design reviews: action, part, owner, due, from, closed
     Gate Log   written by the app when a gate is passed: part, gate, due, passed
 
-Permissions are SharePoint's: a file you can't edit syncs as read-only, and the
-app treats it as view-only.
+Permissions are SharePoint's: if Windows won't let the app write a file (you don't have
+Edit access), the app treats it as view-only.
 """
 
+import contextlib
 import json
 import os
 import re
@@ -61,11 +62,7 @@ class SaveError(Exception):
 
 
 class ReadOnlyError(SaveError):
-    """The file is synced read-only, i.e. you don't have edit rights on SharePoint."""
-
-
-class FileBusyError(SaveError):
-    """The file is open in Excel (or otherwise locked)."""
+    """Windows refused the write, i.e. you don't have edit rights on SharePoint."""
 
 
 class ChangedOnDiskError(SaveError):
@@ -238,27 +235,34 @@ def record_part_change(team, old, new, today=None):
 
 
 def is_writable(path):
-    """OneDrive syncs files you can only view as read-only."""
-    return os.access(path, os.W_OK)
+    """Whether Windows will let us write the file. OneDrive doesn't always mark files you can only view as
+    read-only (the sync client blocks the write instead), so actually open it for writing; nothing is written."""
+    if not os.access(path, os.W_OK):
+        return False
+    try:
+        with open(path, "r+b"):
+            return True
+    except OSError:
+        return False
 
 
 def ensure_can_save(path, loaded_mtime=None):
     if not is_writable(path):
-        raise ReadOnlyError(f"{path.name} is view-only for you (SharePoint permissions).")
+        raise ReadOnlyError("Edit failed.")
     if loaded_mtime is not None and abs(path.stat().st_mtime - loaded_mtime) > 1e-6:
         raise ChangedOnDiskError(f"{path.name} was changed by someone else. Your edit wasn't saved; it has been reloaded.")
-    try:
-        with open(path, "r+b"):  # Excel holds a write lock while the file is open
-            pass
-    except PermissionError as e:
-        raise FileBusyError(f"{path.name} is open in Excel. Close it there and save again.") from e
 
 
 def _save_atomic(wb, path):
     # OneDrive ignores *.tmp files, so a half-written file never syncs.
     tmp = path.with_name(path.name + ".tmp")
-    wb.save(tmp)
-    os.replace(tmp, path)
+    try:
+        wb.save(tmp)
+        os.replace(tmp, path)
+    except OSError as e:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise ReadOnlyError("Edit failed.") from e
 
 
 # --------------------------------------------------------------------------- loading

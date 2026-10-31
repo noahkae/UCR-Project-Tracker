@@ -182,7 +182,7 @@ class TrackerApp:
             try:
                 core.write_rollup(self.tracker)
             except core.SaveError:
-                pass  # master open in Excel; it'll be refreshed on the next save
+                pass  # it'll be refreshed on the next save
 
     # ---- navigation
 
@@ -699,10 +699,7 @@ class TrackerApp:
             if dialog:
                 self.page.pop_dialog()
             self.toast(str(e), error=True)
-            if isinstance(e, core.ChangedOnDiskError):
-                self.reload()
-            else:
-                self.show(self.view)
+            self.reload()  # picks up someone else's save, or shows the file as View only
             return
         if dialog:
             self.page.pop_dialog()
@@ -777,8 +774,7 @@ class TrackerApp:
             self.tracker.key_dates = backup
             self.page.pop_dialog()
             self.toast(str(e), error=True)
-            if isinstance(e, core.ChangedOnDiskError):
-                self.reload()
+            self.reload()  # picks up someone else's save, or shows the master as View only
             return
         self.page.pop_dialog()
         self.toast("Key dates saved")

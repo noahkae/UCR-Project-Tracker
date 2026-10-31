@@ -119,9 +119,9 @@ C:\Users\<you>\OneDrive - University of Calgary\UCalgary-Racing - Documents\Proj
 The app remembers your choice. To switch later, click the **folder** button at the bottom of the left rail; hovering over it
 shows the current folder.
 
-Files you can only view are synced **read-only**, so the app shows them as **View only** and you can't change them by accident.
-
-Files you can only view are synced **read-only**, so the app shows them as **View only** and you can't change them by accident.
+When the app loads, it checks each file by opening it for writing (nothing is written). Files you only have View access to
+show as **View only**, so you can't change them by accident. If a save is still refused, the app says **Edit failed**,
+undoes the change and reloads.
 
 ---
 
@@ -272,9 +272,8 @@ The **Plan** sheet looks like this:
 | Double-clicking the `.pyzw` opens an editor or asks what to open it with | Right-click → *Open with* → *Choose another app* → **Python** (the one with the rocket icon, `pyw.exe`) → *Always*. Or reinstall Python with "py launcher" ticked. |
 | Installing the packages fails | You need internet access the first time. In a terminal, run `py -m pip install flet openpyxl matplotlib`, then double-click again. |
 | Nothing happens on double-click | In a terminal, run `py "UCR Project Tracker.pyzw"` to see the error. |
-| "… is open in Excel" | Close the file in Excel and save again. |
 | "… was changed by someone else" | Someone saved it at the same time. The app reloaded the file, so make your edit again. |
-| "… is view-only for you" | You don't have Edit access on SharePoint. Ask the PM. |
+| "Edit failed." | You don't have Edit access to that file on SharePoint (it now shows as View only). Ask the PM. |
 | A subteam is missing | Check its file is in `Subteams/` and has a sheet called **Plan**. |
 | The app can't find the tracker | Add the SharePoint shortcut (section 3), wait for it to appear in File Explorer, then click the folder button in the app and **Browse** to it. |
 
