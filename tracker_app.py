@@ -40,6 +40,7 @@ STATUS_COLOURS = {  # status -> (container colour, text colour)
     "At risk": None,
     "Blocked": (ft.Colors.ERROR_CONTAINER, ft.Colors.ON_ERROR_CONTAINER),
     "You": (ft.Colors.PRIMARY_CONTAINER, ft.Colors.ON_PRIMARY_CONTAINER),
+    "Now": None,  # a blackout or event that's on right now
 }
 STATUS_TONES = {
     "dark": {"amber": ("#3D3112", "#FFD77A"), "green": ("#16331F", "#8FDCA5")},
@@ -49,12 +50,13 @@ STATUS_TONES = {
 
 def use_mode(dark):
     tones = STATUS_TONES["dark" if dark else "light"]
-    STATUS_COLOURS.update({"Due soon": tones["amber"], "At risk": tones["amber"], "On track": tones["green"]})
+    STATUS_COLOURS.update({"Due soon": tones["amber"], "At risk": tones["amber"], "Now": tones["amber"], "On track": tones["green"]})
 
 
 CALENDAR_COLOURS = {  # calendar-only keys: gates still to come, and upcoming design reviews
     "Future": (ft.Colors.SECONDARY_CONTAINER, ft.Colors.ON_SECONDARY_CONTAINER),
     "Review": (ft.Colors.TERTIARY_CONTAINER, ft.Colors.ON_TERTIARY_CONTAINER),
+    "Blackout": (ft.Colors.SURFACE_CONTAINER_HIGHEST, ft.Colors.ON_SURFACE_VARIANT),
 }
 # Team look, from the Pit Wall newsletter and the Gantt export: near-black, red, warm grey.
 # Pure brand red (#FF0000) stays in the logo; text and icons use Google's softer reds (dark #F28B82, light #C5221F),
@@ -99,7 +101,8 @@ PART_COLUMNS = ("Part", "Owner", "Gate", "Due", "Status", "Notes")
 COLUMN_GAP = 20
 TABLE_CHROME = 200  # rail, page padding and card around the parts table
 MIN_NOTES = 160  # narrower than this and the table keeps fixed widths and scrolls sideways
-TYPE_ICONS = {"Deadline": ft.Icons.FLAG_OUTLINED, "Design Review": ft.Icons.GROUPS_OUTLINED, "Milestone": ft.Icons.EMOJI_EVENTS_OUTLINED}
+TYPE_ICONS = {"Deadline": ft.Icons.FLAG_OUTLINED, "Design Review": ft.Icons.GROUPS_OUTLINED, "Milestone": ft.Icons.EMOJI_EVENTS_OUTLINED,
+              "Freeze": ft.Icons.AC_UNIT, "Blackout": ft.Icons.DO_NOT_DISTURB_ON_OUTLINED, "Event": ft.Icons.CELEBRATION_OUTLINED}
 
 
 def fmt(d):
@@ -144,34 +147,39 @@ def empty(text):
     return ft.Container(ft.Text(text, color=ft.Colors.ON_SURFACE_VARIANT, italic=True), padding=ft.Padding.symmetric(vertical=8))
 
 
-def gate_dots(part, gates):
-    """One dot per gate: filled = passed, ringed = current, faint = to come."""
-    current = core.current_gate(part, gates)
-    passed, _ = core.progress(part, gates)
-    st = core.status(part, gates)
+def gate_dots(part, team):
+    """One dot per gate: filled = passed, ringed = being worked on (several at once when gates run in parallel),
+    hollow grey = skipped, faint = waiting for an earlier gate."""
     dots = []
-    for i, g in enumerate(gates):
-        if i < passed:
-            colour, border = ft.Colors.ON_SURFACE, None
-        elif g == current:
-            colour = STATUS_COLOURS.get(st, STATUS_COLOURS["No date"])[0]
-            border = ft.Border.all(2, ft.Colors.PRIMARY)
-        else:
-            colour, border = ft.Colors.SURFACE_CONTAINER_HIGHEST, None
+    for g in team.gates:
+        state = core.gate_state(part, team, g)
         due = part.dates.get(g)
-        dots.append(ft.Container(width=14, height=14, border_radius=7, bgcolor=colour, border=border,
-                                 tooltip=f"{g}: {fmt(due) if due else 'no date'}"))
+        if state == "passed":
+            colour, border, tip = ft.Colors.ON_SURFACE, None, "passed"
+        elif state == "active":
+            colour = STATUS_COLOURS.get(core.date_status(due), STATUS_COLOURS["No date"])[0]
+            border, tip = ft.Border.all(2, ft.Colors.PRIMARY), f"due {fmt(due)}"
+        elif state == "skipped":
+            colour, border, tip = None, ft.Border.all(1.5, ft.Colors.OUTLINE), "skipped"
+        else:
+            colour, border, tip = ft.Colors.SURFACE_CONTAINER_HIGHEST, None, f"waiting · due {fmt(due)}"
+        dots.append(ft.Container(width=14, height=14, border_radius=7, bgcolor=colour, border=border, tooltip=f"{g}: {tip}"))
     return ft.Row(dots, spacing=4)
+
+
+def tag_chip(tag):
+    return ft.Container(ft.Text(tag, size=11, color=ft.Colors.ON_SECONDARY_CONTAINER), bgcolor=ft.Colors.SECONDARY_CONTAINER,
+                        border_radius=8, padding=ft.Padding.symmetric(horizontal=7, vertical=1))
 
 
 def plural(n, word):
     return f"{n} {word}{'' if n == 1 else 's'}"
 
 
-def lateness(entry):
-    if not entry.due:
+def lateness(passed, due):
+    if not (passed and due):
         return ""
-    days = (entry.passed - entry.due).days
+    days = (passed - due).days
     return "on time" if days == 0 else f"{plural(abs(days), 'day')} {'late' if days > 0 else 'early'}"
 
 
@@ -185,6 +193,7 @@ class TrackerApp:
         self.cal_month = date.today().replace(day=1)
         self.expanded = set()  # parts whose sub-parts are shown
         self.part_table, self.part_query, self.part_widths, self.notes_width = None, "", [], None
+        self.part_tag = None  # tag filter on the subteam page
         page.on_resize = self.on_resize
         self.rail = ft.NavigationRail(
             label_type=ft.NavigationRailLabelType.ALL, min_width=96, group_alignment=-0.9, scrollable=True, on_change=self.on_nav,
@@ -228,7 +237,7 @@ class TrackerApp:
     def known_names(self):
         names = {}
         for t in self.tracker.subteams:
-            for n in [p.owner for p in t.parts] + [a.owner for a in t.actions]:
+            for n in [n for p in t.parts for n in p.people()] + [a.owner for a in t.actions]:
                 if n:
                     names.setdefault(n.casefold(), n)
         for kd in self.tracker.key_dates:
@@ -288,13 +297,13 @@ class TrackerApp:
 
     def part_tile(self, team, part, today, show_team=True):
         index = team.parts.index(part)
-        sub = f"{core.current_gate(part, team.gates)} due {fmt(core.due_date(part, team.gates))}"
+        sub = f"{core.current_gate(part, team)} due {fmt(core.due_date(part, team))}"
         sub = (f"{team.name} · " if show_team else "") + sub + (f" · {part.owner}" if part.owner else "") + (f"\n{part.notes}" if part.notes else "")
         return ft.ListTile(
             leading=ft.Icon(ft.Icons.BLOCK if part.flag == "Blocked" else ft.Icons.PRECISION_MANUFACTURING_OUTLINED,
-                            color=ft.Colors.ERROR if core.needs_attention(part, team.gates, today) else ft.Colors.ON_SURFACE_VARIANT),
+                            color=ft.Colors.ERROR if core.needs_attention(part, team, today) else ft.Colors.ON_SURFACE_VARIANT),
             title=ft.Text(part.key), subtitle=ft.Text(sub),
-            trailing=pills((part.flag, None) if part.flag != "OK" else None, (core.status(part, team.gates, today), None)),
+            trailing=pills((part.flag, None) if part.flag != "OK" else None, (core.status(part, team, today), None)),
             on_click=lambda e: self.edit_part(team, index),
         )
 
@@ -316,15 +325,19 @@ class TrackerApp:
 
     def key_date_tile(self, kd, today):
         st = core.key_date_status(kd, today)
-        sub = f"{fmt(kd.date)} · {kd.type}" + (f" · {', '.join(kd.people)}" if kd.people else "")
+        bits = [fmt(kd.date) + (f" – {fmt(kd.end)}" if kd.end and kd.end != kd.date else "")]
+        if kd.internal:
+            bits.append(f"internal {fmt(kd.internal)}")
+        bits += [x for x in (kd.type, kd.track, kd.competition) if x] + ([", ".join(kd.people)] if kd.people else [])
         mine = any(core.is_me(n, self.me) for n in kd.people)
-        label = "Done" if kd.done else ("Held" if st == "Held" else countdown(kd.date, today))
+        target = kd.date if kd.type in core.PERIOD_TYPES else core.key_date_target(kd)
+        label = "Done" if kd.done else (st if st in ("Held", "Now") else countdown(target, today))
         index = self.tracker.key_dates.index(kd)
         return ft.ListTile(
             leading=ft.Icon(TYPE_ICONS.get(kd.type, ft.Icons.EVENT),
                             color=ft.Colors.ERROR if st == "Late" else (ft.Colors.OUTLINE if st in ("Done", "Held") else ft.Colors.ON_SURFACE_VARIANT)),
             title=ft.Text(kd.event, color=ft.Colors.ON_SURFACE_VARIANT if st in ("Done", "Held") else None),
-            subtitle=ft.Text(sub),
+            subtitle=ft.Text(" · ".join(bits) + (f"\n{kd.notes}" if kd.notes else ""), max_lines=3, overflow=ft.TextOverflow.ELLIPSIS),
             trailing=pills(("You", "You") if mine else None, (label, st)),
             on_click=(lambda e: self.edit_key_date(index)) if self.tracker.master_writable else None,
         )
@@ -339,15 +352,15 @@ class TrackerApp:
             stats = {s: 0 for s in ("Late", "Due soon", "Done")}
             flagged = 0
             for p in t.parts:
-                st = core.status(p, t.gates, today)
+                st = core.status(p, t, today)
                 if st in stats:
                     stats[st] += 1
                 flagged += p.flag != "OK"
-                if core.needs_attention(p, t.gates, today):
-                    attention.append((core.due_date(p, t.gates) or date.max, self.part_tile(t, p, today)))
-                due = core.due_date(p, t.gates)
+                if core.needs_attention(p, t, today):
+                    attention.append((core.due_date(p, t) or date.max, self.part_tile(t, p, today)))
+                due = core.due_date(p, t)
                 if due and today <= due <= soon:
-                    upcoming.append((due, ft.Icons.PRECISION_MANUFACTURING_OUTLINED, f"{p.key}: {core.current_gate(p, t.gates)}", t.name, t.name))
+                    upcoming.append((due, ft.Icons.PRECISION_MANUFACTURING_OUTLINED, f"{p.key}: {core.current_gate(p, t)}", t.name, t.name))
             late_actions = 0
             for a in t.actions:
                 st = core.action_status(a, today)
@@ -356,8 +369,8 @@ class TrackerApp:
                     attention.append((a.due, self.action_tile(t, a, today)))
                 elif a.closed is None and a.due and today <= a.due <= soon:
                     upcoming.append((a.due, ft.Icons.TASK_ALT, a.text, f"Action · {t.name}" + (f" · {a.owner}" if a.owner else ""), t.name))
-            passed = sum(core.progress(p, t.gates)[0] for p in t.parts)
-            total = sum(core.progress(p, t.gates)[1] for p in t.parts) or 1
+            passed = sum(core.progress(p, t)[0] for p in t.parts)
+            total = sum(core.progress(p, t)[1] for p in t.parts) or 1
             chips = [(f"{stats['Late']} late", "Late") if stats["Late"] else None,
                      (f"{late_actions} action{'s' if late_actions > 1 else ''} overdue", "Late") if late_actions else None,
                      (f"{flagged} flagged", "At risk") if flagged else None,
@@ -424,21 +437,21 @@ class TrackerApp:
 
         who = ft.Dropdown(label="I am…", value=self.me if self.me in names else None, width=320, enable_filter=True,
                           editable=True, options=[ft.DropdownOption(key=n, text=n) for n in names], on_select=pick)
-        header = ft.Row([heading("My work", "Your parts, actions and the key dates you're responsible for."), who],
+        header = ft.Row([heading("My work", "Parts you own or work on, your actions, and the key dates you're responsible for."), who],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.START)
         if not self.me:
             return ft.Column([header, section("Get started", empty(
-                "Pick your name above. Names come from part owners, action owners and key-date people."))], spacing=20), None
+                "Pick your name above. Names come from part owners and assignees, action owners and key-date people."))], spacing=20), None
 
         parts = [(t, p) for t in self.tracker.subteams for p in t.parts
-                 if core.is_me(p.owner, self.me) and core.current_gate(p, t.gates) != core.DONE]
-        parts.sort(key=lambda tp: (not core.needs_attention(tp[1], tp[0].gates, today), core.due_date(tp[1], tp[0].gates) or date.max))
+                 if any(core.is_me(n, self.me) for n in p.people()) and not core.is_done(p, t)]
+        parts.sort(key=lambda tp: (not core.needs_attention(tp[1], tp[0], today), core.due_date(tp[1], tp[0]) or date.max))
         actions = [(t, a) for t in self.tracker.subteams for a in t.actions if core.is_me(a.owner, self.me) and a.closed is None]
         actions.sort(key=lambda ta: ta[1].due or date.max)
         dates = [k for k in self.tracker.key_dates
                  if any(core.is_me(n, self.me) for n in k.people) and core.key_date_status(k, today) not in ("Done", "Held")]
         dates.sort(key=lambda k: k.date or date.max)
-        late = sum(core.needs_attention(p, t.gates, today) for t, p in parts) + \
+        late = sum(core.needs_attention(p, t, today) for t, p in parts) + \
             sum(core.action_status(a, today) == "Late" for _, a in actions) + \
             sum(core.key_date_needs_attention(k, today) for k in dates)
         summary = pill(f"{late} need attention", "Late") if late else pill("Nothing late", "On track")
@@ -465,10 +478,11 @@ class TrackerApp:
             if t.name in hidden:
                 continue
             for pi, p in enumerate(t.parts):
-                passed, _ = core.progress(p, t.gates)
-                current = core.current_gate(p, t.gates)
-                for gi, g in enumerate(t.gates):
-                    key = "Done" if gi < passed else (core.status(p, t.gates, today) if g == current else "Future")
+                for g in t.gates:
+                    state = core.gate_state(p, t, g)
+                    if state == "skipped":
+                        continue
+                    key = {"passed": "Done", "waiting": "Future"}.get(state) or core.date_status(p.dates.get(g), False, today)
                     add(p.dates.get(g), 1, f"{emoji(t.name)} {p.key}: {g}", key, lambda e, t=t, i=pi: self.edit_part(t, i))
             if "Actions" not in hidden:
                 for ai, a in enumerate(t.actions):
@@ -478,7 +492,11 @@ class TrackerApp:
             for ki, k in enumerate(self.tracker.key_dates):
                 st = core.key_date_status(k, today)
                 click = (lambda e, i=ki: self.edit_key_date(i)) if self.tracker.master_writable else None
-                add(k.date, 0, f"★ {k.event}", "Review" if k.type == "Design Review" and st != "Held" else st, click)
+                key = "Review" if k.type == "Design Review" and st != "Held" else ("Blackout" if k.type == "Blackout" else st)
+                for day in core.key_date_days(k):
+                    add(day, 0, f"★ {k.event}", key, click)
+                if k.internal and k.internal != k.date and not k.done:
+                    add(k.internal, 0, f"⏱ {k.event} (internal)", st, click)
         for day in events.values():
             day.sort(key=lambda ev: (ev[0], ev[1]))
         return events
@@ -595,12 +613,32 @@ class TrackerApp:
             table.controls = [self.part_header()] + self.part_rows(team, self.part_query, today)
             table.update()
 
-        search = ft.TextField(hint_text="Filter by part, owner or note", prefix_icon=ft.Icons.SEARCH, dense=True, width=300,
+        search = ft.TextField(hint_text="Filter by part, person or note", prefix_icon=ft.Icons.SEARCH, dense=True, width=300,
                               on_change=filter_parts)
+        tags = core.all_tags(team)
+        if self.part_tag not in tags:
+            self.part_tag = None
+        tag_row = ft.Row(wrap=True, spacing=6, run_spacing=6)
+
+        def pick_tag(tag):
+            def handler(e):
+                self.part_tag = None if tag == self.part_tag else tag
+                render_tags()
+                table.controls = [self.part_header()] + self.part_rows(team, self.part_query, today)
+                tag_row.update()
+                table.update()
+            return handler
+
+        def render_tags():
+            tag_row.controls = [ft.Text("Tags:", size=13, color=ft.Colors.ON_SURFACE_VARIANT)] + [
+                ft.Chip(label=ft.Text(t), selected=t == self.part_tag, show_checkmark=False, on_select=pick_tag(t)) for t in tags]
+        render_tags()
         if not team.parts:
             parts_body = empty("No parts yet." + (" Press + to add one." if team.writable else ""))
         else:
             parts_body = table if self.notes_width is None else ft.Row([table], scroll=ft.ScrollMode.AUTO)
+            if tags:
+                parts_body = ft.Column([tag_row, parts_body], spacing=8)
 
         open_actions = sorted((a for a in team.actions if a.closed is None), key=lambda a: a.due or date.max)
         closed = sorted((a for a in team.actions if a.closed), key=lambda a: a.closed, reverse=True)[:5]
@@ -619,7 +657,7 @@ class TrackerApp:
         def fit(texts, px, low, high, extra=0):
             return max(low, min(high, int(max([len(t) for t in texts] + [0]) * px + extra)))
         today = date.today()
-        summaries = [plural(len(kids), "sub-part") + f" · {sum(core.needs_attention(c, team.gates, today) for c in kids)} need attention"
+        summaries = [plural(len(kids), "sub-part") + f" · {sum(core.needs_attention(c, team, today) for c in kids)} need attention"
                      for kids in (core.children(team, p) for p in team.parts) if kids]
         part = max(fit([p.name for p in team.parts], 7.6, 140, 340, 56), fit(summaries, 6.4, 0, 340, 44))
         owner = fit([p.owner for p in team.parts] + ["Owner"], 7.6, 70, 200, 8)
@@ -649,45 +687,57 @@ class TrackerApp:
         """Top-level parts, problems first; a part with sub-parts sorts by its worst one and expands to show them.
         While filtering, a parent is shown (expanded) if any of its sub-parts match."""
         order = {"Late": 0, "Due soon": 1, "On track": 2, "No date": 3, "Done": 4}
-        rank = lambda p: (p.flag == "OK", order[core.status(p, team.gates, today)], core.due_date(p, team.gates) or date.max)
+        rank = lambda p: (p.flag == "OK", order[core.status(p, team, today)], core.due_date(p, team) or date.max)
         q = (query or "").strip().casefold()
-        match = lambda p: not q or q in f"{p.name} {p.parent} {p.owner} {p.notes}".casefold()
+        tag = self.part_tag
+        filtering = bool(q or tag)
+        match = lambda p: ((not q or q in f"{p.name} {p.parent} {' '.join(p.people())} {' '.join(p.tags)} {p.notes}".casefold())
+                           and (not tag or tag in p.tags))
         index = {id(p): i for i, p in enumerate(team.parts)}
         nested = {id(c) for p in team.parts for c in core.children(team, p)}
         families = [(p, sorted(core.children(team, p), key=rank)) for p in team.parts if id(p) not in nested]
         rows = []
         for top, kids in sorted(families, key=lambda f: min([rank(f[0])] + [rank(c) for c in f[1]])):
-            shown = [c for c in kids if match(c)] if q else kids
-            if q and not match(top) and not shown:
+            shown = [c for c in kids if match(c)] if filtering else kids
+            if filtering and not match(top) and not shown:
                 continue
-            expanded = bool(shown) and (bool(q) or top.key in self.expanded)
+            expanded = bool(shown) and (filtering or top.key in self.expanded)
             rows.append(self.part_row(team, top, index[id(top)], today, kids, expanded))
             if expanded:
                 rows += [self.part_row(team, c, index[id(c)], today) for c in shown]
         return rows
 
     def part_row(self, team, p, idx, today, kids=(), expanded=False):
-        st = core.status(p, team.gates, today)
+        st = core.status(p, team, today)
+        warnings = core.rule_warnings(p, team, self.tracker.key_dates)
+        name = ft.Row([ft.Text(p.name, weight=None if p.parent else ft.FontWeight.W_600)]
+                      + ([ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, size=16, color=STATUS_COLOURS["Due soon"][1], tooltip="\n".join(warnings))]
+                         if warnings else []), spacing=4, tight=True)
+        lines = [name]
         if p.parent:  # a sub-part, indented under its parent
             lead = ft.Row([ft.Container(width=28), ft.Icon(ft.Icons.SUBDIRECTORY_ARROW_RIGHT, size=16, color=ft.Colors.OUTLINE)],
                           spacing=4, tight=True)
-            title = ft.Text(p.name)
         else:
             lead = ft.IconButton(ft.Icons.EXPAND_MORE if expanded else ft.Icons.CHEVRON_RIGHT, icon_size=20,
                                  tooltip="Hide sub-parts" if expanded else "Show sub-parts",
                                  on_click=lambda e: self.toggle_part(team, p)) if kids else ft.Container(width=40)
-            title = ft.Text(p.name, weight=ft.FontWeight.W_600)
             if kids:
-                late = sum(core.needs_attention(c, team.gates, today) for c in kids)
+                late = sum(core.needs_attention(c, team, today) for c in kids)
                 summary = plural(len(kids), "sub-part") + (f" · {late} need attention" if late else "")
-                title = ft.Column([title, ft.Text(summary, size=12, color=ft.Colors.ERROR if late else ft.Colors.ON_SURFACE_VARIANT)],
-                                  spacing=0, tight=True)
+                lines.append(ft.Text(summary, size=12, color=ft.Colors.ERROR if late else ft.Colors.ON_SURFACE_VARIANT))
+        if p.tags:
+            lines.append(ft.Row([tag_chip(t) for t in p.tags], spacing=4, run_spacing=4, wrap=True))
+        owner = ft.Text(p.owner or "—")
+        if p.assignees:
+            owner = ft.Column([owner, ft.Text("+ " + ", ".join(p.assignees), size=12, color=ft.Colors.ON_SURFACE_VARIANT, max_lines=1,
+                                              overflow=ft.TextOverflow.ELLIPSIS, tooltip=", ".join(p.assignees))], spacing=0, tight=True)
         return self.table_row(
             [
-                ft.Row([lead, title], spacing=4, tight=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                ft.Text(p.owner or "—"),
-                ft.Column([ft.Text(core.current_gate(p, team.gates), size=13), gate_dots(p, team.gates)], spacing=4, tight=True),
-                ft.Text(fmt(core.due_date(p, team.gates))),
+                # the name block takes the rest of the Part column, so long names and tag rows wrap instead of spilling over
+                ft.Row([lead, ft.Column(lines, spacing=2, tight=True, expand=True)], spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                owner,
+                ft.Column([ft.Text(core.current_gate(p, team), size=13), gate_dots(p, team)], spacing=4, tight=True),
+                ft.Text(fmt(core.due_date(p, team))),
                 pills((st, None), (p.flag, None) if p.flag != "OK" else None),
             ],
             ft.Text(p.notes, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS, tooltip=p.notes or None),
@@ -700,8 +750,9 @@ class TrackerApp:
         self.part_table.update()
 
     def edit_part(self, team, index, parent=""):
-        part = team.parts[index] if index is not None else core.Part(current=team.gates[0] if team.gates else core.DONE, parent=parent)
+        part = team.parts[index] if index is not None else core.Part(parent=parent)
         ro = not team.writable
+        today = date.today()
         kids = core.children(team, part) if index is not None else []
         name = ft.TextField(label="Part", value=part.name, read_only=ro, autofocus=index is None)
         parents = [p.name for i, p in enumerate(team.parts) if not p.parent and i != index]
@@ -709,29 +760,132 @@ class TrackerApp:
             label="Sub-part of", value=part.parent or "", disabled=ro or bool(kids), expand=True,
             options=[ft.DropdownOption(key="", text="— (top-level part)")] + [ft.DropdownOption(key=n, text=n) for n in parents],
             tooltip=f"{part.name} has sub-parts, so it stays top-level" if kids else None)
-        owner = ft.TextField(label="Owner", value=part.owner, read_only=ro)
-        gate = ft.Dropdown(label="Current gate", value=core.current_gate(part, team.gates), disabled=ro, expand=True,
-                           options=[ft.DropdownOption(key=g, text=g) for g in team.gates + [core.DONE]])
+        owner = ft.TextField(label="Owner (accountable)", value=part.owner, read_only=ro, expand=True)
+        assignees = ft.TextField(label="Also working on it", value=", ".join(part.assignees), hint_text="e.g. Yi, Artur",
+                                 read_only=ro, expand=True)
+        tags = ft.TextField(label="Tags", value=", ".join(part.tags), hint_text="e.g. Development, Composites", read_only=ro)
+        suggestions = ft.Row(wrap=True, spacing=6, run_spacing=6)
         flag = ft.SegmentedButton(selected=[part.flag], disabled=ro, show_selected_icon=False,
                                   segments=[ft.Segment(value=f, label=ft.Text(f)) for f in core.FLAGS])
         notes = ft.TextField(label="Notes", value=part.notes, multiline=True, min_lines=2, max_lines=4, read_only=ro)
-        date_fields = {g: date_field(self.page, g, part.dates.get(g), ro) for g in team.gates}
 
-        def advance(e):
-            g = gate.value
-            if g in team.gates:
-                i = team.gates.index(g)
-                gate.value = team.gates[i + 1] if i + 1 < len(team.gates) else core.DONE
-                gate.update()
+        def render_suggestions():
+            have = {t.casefold() for t in core.split_tags(tags.value)}
+            suggestions.controls = [] if ro else [ft.Chip(label=ft.Text(t), leading=ft.Icon(ft.Icons.ADD, size=14), on_click=add_tag(t))
+                                                  for t in core.all_tags(team) if t.casefold() not in have]
+
+        def add_tag(t):
+            def handler(e):
+                tags.value = ", ".join(core.split_tags(tags.value) + [t])
+                render_suggestions()
+                tags.update()
+                suggestions.update()
+            return handler
+
+        def tags_changed(e):
+            render_suggestions()
+            suggestions.update()
+
+        tags.on_change = tags_changed
+        render_suggestions()
+
+        # gates: edited on copies, so Cancel leaves the part untouched
+        passed, skipped = dict(part.passed), set(part.skipped)
+        due_fields = {g: date_field(self.page, "Due", part.dates.get(g), ro, on_change=lambda: refresh()) for g in team.gates}
+        pass_fields = {g: date_field(self.page, "Passed", passed[g][0] if g in passed else None, ro) for g in team.gates}
+        gate_rows = ft.Column(spacing=0, tight=True)
+        warn_box = ft.Container(padding=10, border_radius=8, visible=False, bgcolor=STATUS_COLOURS["Due soon"][0])
+
+        def edited_dates():
+            out = {}
+            for g, fld in due_fields.items():
+                try:
+                    out[g] = fld.parse()
+                except ValueError:
+                    out[g] = part.dates.get(g)
+            return out
+
+        def render_gates():
+            now = core.Part(dates=edited_dates(), passed=passed, skipped=skipped)
+            rows = []
+            for g in team.gates:
+                state = core.gate_state(now, team, g)
+                icon, colour = {"passed": (ft.Icons.CHECK_CIRCLE, ft.Colors.ON_SURFACE), "active": (ft.Icons.RADIO_BUTTON_CHECKED, ft.Colors.PRIMARY),
+                                "skipped": (ft.Icons.DO_NOT_DISTURB_ON_OUTLINED, ft.Colors.OUTLINE),
+                                "waiting": (ft.Icons.RADIO_BUTTON_UNCHECKED, ft.Colors.OUTLINE)}[state]
+                waiting_on = [a for a in team.after.get(g, []) if not core.cleared(now, a)]
+                sub = {"passed": "passed", "active": "being worked on", "skipped": "skipped: doesn't apply to this part",
+                       "waiting": "after " + ", ".join(waiting_on)}[state]
+                if state == "passed" and lateness(passed[g][0], passed[g][1]):
+                    sub += f" ({lateness(passed[g][0], passed[g][1])})"
+                if team.due_before.get(g):
+                    sub += f" · due before {team.due_before[g]}"
+                buttons = []
+                if not ro:
+                    if state == "active":
+                        buttons.append(ft.FilledTonalButton("Passed", icon=ft.Icons.CHECK, on_click=do_pass(g)))
+                    if state == "passed":
+                        buttons.append(ft.TextButton("Undo", on_click=do_unpass(g), tooltip="Un-pass this gate (and any passed gates after it)"))
+                    if state == "skipped":
+                        buttons.append(ft.TextButton("Unskip", on_click=do_skip(g, False)))
+                    elif state != "passed":
+                        buttons.append(ft.TextButton("Skip", on_click=do_skip(g, True), tooltip="This gate doesn't apply to this part"))
+                fields = [] if state == "skipped" else [ft.Container(due_fields[g].control, expand=1)]
+                if state == "passed":
+                    fields.append(ft.Container(pass_fields[g].control, expand=1))
+                rows.append(ft.Container(ft.Column([
+                    ft.Row([ft.Icon(icon, color=colour, size=20),
+                            ft.Column([ft.Text(g, weight=ft.FontWeight.W_600 if state == "active" else None),
+                                       ft.Text(sub, size=12, color=ft.Colors.ON_SURFACE_VARIANT)], spacing=0, tight=True, expand=True),
+                            *buttons], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    *([ft.Row(fields, spacing=8)] if fields else []),
+                ], spacing=6, tight=True), padding=ft.Padding.symmetric(vertical=8),
+                    border=ft.Border(bottom=ft.BorderSide(1, ft.Colors.OUTLINE_VARIANT))))
+            gate_rows.controls = rows
+            warnings = core.rule_warnings(now, team, self.tracker.key_dates)
+            warn_box.content = ft.Column([ft.Text(f"⚠ {w}", size=13, color=STATUS_COLOURS["Due soon"][1]) for w in warnings], spacing=2)
+            warn_box.visible = bool(warnings)
+
+        def refresh():
+            render_gates()
+            gate_rows.update()
+            warn_box.update()
+
+        def do_pass(g):
+            def handler(e):
+                passed[g] = (today, edited_dates().get(g))
+                pass_fields[g].field.value = today.isoformat()
+                refresh()
+            return handler
+
+        def do_unpass(g):
+            def handler(e):
+                for x in [g] + core.descendants(team, g):
+                    passed.pop(x, None)
+                refresh()
+            return handler
+
+        def do_skip(g, on):
+            def handler(e):
+                if on:
+                    skipped.add(g)
+                    passed.pop(g, None)
+                else:
+                    skipped.discard(g)
+                refresh()
+            return handler
+
+        render_gates()
 
         def save(e):
             try:
-                dates = {g: f.parse() for g, f in date_fields.items()}
+                dates = {g: fld.parse() for g, fld in due_fields.items()}
+                new_passed = {g: (pass_fields[g].parse(), due_then) for g, (_, due_then) in passed.items()}
             except ValueError as err:
                 self.toast(str(err), error=True)
                 return
-            new = core.Part(name.value.strip(), owner.value.strip(), gate.value or "", (flag.selected or ["OK"])[0], notes.value.strip(), dates,
-                            parent_field.value or "")
+            new = core.Part(name.value.strip(), owner.value.strip(), "", (flag.selected or ["OK"])[0], notes.value.strip(), dates,
+                            parent_field.value or "", core.split_names(assignees.value), core.split_tags(tags.value), new_passed, set(skipped))
             problem = core.check_part(team, new, index)
             if problem:
                 name.error = problem
@@ -764,30 +918,22 @@ class TrackerApp:
             actions.append(ft.FilledButton("Save", on_click=save))
             if index is not None and not part.parent:
                 actions.insert(1, ft.TextButton("Add sub-part", icon=ft.Icons.ADD, on_click=add_sub_part))
-        gate_row = [gate] + ([ft.FilledTonalButton("Gate passed", icon=ft.Icons.CHECK_CIRCLE, on_click=advance)] if not ro else [])
-        history = [e for e in team.log if e.part == part.key] if index is not None else []
-        history.sort(key=lambda e: team.gates.index(e.gate) if e.gate in team.gates else 99)
         part_actions = [a for a in team.actions if a.part == part.key and a.closed is None] if index is not None else []
         extra = []
-        if history:
-            extra += [ft.Text("Gate history", theme_style=ft.TextThemeStyle.TITLE_SMALL)] + [
-                ft.Text(f"✓ {e.gate}: passed {fmt(e.passed)}" + (f" ({lateness(e)})" if e.due else ""), size=13,
-                        color=ft.Colors.ERROR if e.due and e.passed > e.due else None)
-                for e in history]
         if part_actions:
             extra += [ft.Text("Open actions", theme_style=ft.TextThemeStyle.TITLE_SMALL)] + [
                 ft.Text(f"• {a.text} ({a.owner or 'no owner'}, due {fmt(a.due)})", size=13) for a in part_actions]
         self.page.show_dialog(ft.AlertDialog(
             title=ft.Text(("Edit part" if index is not None else ("New sub-part" if parent else "New part")) if not ro else part.key),
             content=ft.Container(ft.Column([
-                name, ft.Row([parent_field]), owner,
-                ft.Row(gate_row, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                name, ft.Row([parent_field]), ft.Row([owner, assignees]), tags, suggestions,
                 ft.Text("Flag", size=12, color=ft.Colors.ON_SURFACE_VARIANT), flag,
                 notes,
+                warn_box,
+                ft.Text("Gates", theme_style=ft.TextThemeStyle.TITLE_SMALL),
+                gate_rows,
                 *extra,
-                ft.Text("Gate due dates", theme_style=ft.TextThemeStyle.TITLE_SMALL),
-                *[f.control for f in date_fields.values()],
-            ], tight=True, spacing=12, scroll=ft.ScrollMode.AUTO, horizontal_alignment=ft.CrossAxisAlignment.STRETCH), width=460),
+            ], tight=True, spacing=12, scroll=ft.ScrollMode.AUTO, horizontal_alignment=ft.CrossAxisAlignment.STRETCH), width=620),
             actions=actions,
         ))
 
@@ -835,24 +981,55 @@ class TrackerApp:
         self.commit(team, change, dialog=False)
 
     def edit_gates(self, team):
-        """Let the lead rename, add, remove and reorder their subteam's gates."""
-        rows = [[g, ft.TextField(value=g, dense=True, expand=True)] for g in team.gates]  # [name in the file or None, field]
-        column = ft.Column(spacing=4, tight=True)
+        """Let the lead rename, add, remove and reorder their subteam's gates, say which gates each one comes after
+        (so gates can run in parallel), and tie a gate to a key date it must be due before."""
+        events = [""] + sorted({k.event for k in self.tracker.key_dates if k.type != "Design Review"}, key=str.casefold)
+        column = ft.Column(spacing=0, tight=True)
         error = ft.Text(color=ft.Colors.ERROR, size=13, visible=False)
 
+        def make(old, name, due=""):
+            options = events + ([due] if due and due not in events else [])
+            return {"old": old, "after": set(),
+                    "field": ft.TextField(value=name, dense=True, expand=True, hint_text="Gate name", on_blur=lambda e: refresh()),
+                    "due": ft.Dropdown(value=due, dense=True, width=230, label="Due before",
+                                       options=[ft.DropdownOption(key=v, text=v or "— (no key date)") for v in options])}
+
+        rows = [make(g, g, team.due_before.get(g, "")) for g in team.gates]
+        by_name = {r["old"]: r for r in rows}
+        for r in rows:
+            r["after"] = {id(by_name[a]) for a in team.after.get(r["old"], []) if a in by_name}
+
         def render():
-            column.controls = [
-                ft.Row([
-                    ft.Text(f"{i + 1}.", width=22, color=ft.Colors.ON_SURFACE_VARIANT), field,
-                    ft.IconButton(ft.Icons.ARROW_UPWARD, tooltip="Move up", disabled=i == 0, on_click=move(i, -1)),
-                    ft.IconButton(ft.Icons.ARROW_DOWNWARD, tooltip="Move down", disabled=i == len(rows) - 1, on_click=move(i, 1)),
-                    ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip="Remove", on_click=remove(i)),
-                ], spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER)
-                for i, (_, field) in enumerate(rows)]
+            controls = []
+            for i, r in enumerate(rows):
+                earlier = rows[:i]
+                r["after"] &= {id(x) for x in earlier}  # a gate can only come after gates above it
+                chips = [ft.Chip(label=ft.Text(x["field"].value or "(unnamed)", size=12), selected=id(x) in r["after"],
+                                 on_select=toggle(r, x)) for x in earlier]
+                controls.append(ft.Container(ft.Column([
+                    ft.Row([ft.Text(f"{i + 1}.", width=22, color=ft.Colors.ON_SURFACE_VARIANT), r["field"],
+                            ft.IconButton(ft.Icons.ARROW_UPWARD, tooltip="Move up", disabled=i == 0, on_click=move(i, -1)),
+                            ft.IconButton(ft.Icons.ARROW_DOWNWARD, tooltip="Move down", disabled=i == len(rows) - 1, on_click=move(i, 1)),
+                            ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip="Remove", on_click=remove(i))],
+                           spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    ft.Container(ft.Row([r["due"], ft.Text("Comes after:", size=12, color=ft.Colors.ON_SURFACE_VARIANT)]
+                                        + (chips or [ft.Text("nothing (can start any time)", size=12, italic=True,
+                                                             color=ft.Colors.ON_SURFACE_VARIANT)]),
+                                        wrap=True, spacing=6, run_spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                                 padding=ft.Padding.only(left=26)),
+                ], spacing=6, tight=True), padding=ft.Padding.symmetric(vertical=10),
+                    border=ft.Border(bottom=ft.BorderSide(1, ft.Colors.OUTLINE_VARIANT))))
+            column.controls = controls
 
         def refresh():
             render()
             column.update()
+
+        def toggle(r, x):
+            def handler(e):
+                r["after"] ^= {id(x)}
+                refresh()
+            return handler
 
         def move(i, step):
             def handler(e):
@@ -867,48 +1044,58 @@ class TrackerApp:
             return handler
 
         def add(e):
-            rows.append([None, ft.TextField(hint_text="New gate", dense=True, expand=True, autofocus=True)])
+            r = make(None, "")
+            r["after"] = {id(rows[-1])} if rows else set()
+            rows.append(r)
             refresh()
 
         def reset(e):
-            rows[:] = [[g if g in team.gates else None, ft.TextField(value=g, dense=True, expand=True)] for g in core.DEFAULT_GATES]
+            rows[:] = [make(g if g in team.gates else None, g) for g in core.DEFAULT_GATES]
+            for prev, r in zip(rows, rows[1:]):
+                r["after"] = {id(prev)}
             refresh()
 
         def save(e):
-            gates = [(old, field.value.strip()) for old, field in rows]
-            problem = core.check_gates([name for _, name in gates])
+            names = [r["field"].value.strip() for r in rows]
+            problem = core.check_gates(names)
             if problem:
                 error.value, error.visible = problem, True
                 error.update()
                 return
-            if gates == [(g, g) for g in team.gates]:
+            name_of = {id(r): n for r, n in zip(rows, names)}
+            gates = [(r["old"], n) for r, n in zip(rows, names)]
+            after = {n: [name_of[id(x)] for x in rows if id(x) in r["after"]] for r, n in zip(rows, names)}
+            due = {n: r["due"].value or "" for r, n in zip(rows, names)}
+            if (gates == [(g, g) for g in team.gates] and after == {g: team.after.get(g, []) for g in team.gates}
+                    and {g: d for g, d in due.items() if d} == team.due_before):
                 self.page.pop_dialog()
                 return
-            self.commit(team, lambda: core.change_gates(team, gates))
+            self.commit(team, lambda: core.change_gates(team, gates, after, due))
 
         render()
         self.page.show_dialog(ft.AlertDialog(
             title=ft.Text(f"Gates for {team.name}"),
             content=ft.Container(ft.Column([
-                ft.Text("Parts move through these in order. Renaming a gate keeps its due dates and history; "
-                        "removing one deletes its due dates.", size=13, color=ft.Colors.ON_SURFACE_VARIANT),
+                ft.Text("A gate starts once every gate it comes after is passed (or skipped), so gates with the same prerequisites run "
+                        "in parallel. 'Due before' ties a gate to a key date: the app warns when a part's date for it lands later. "
+                        "Renaming a gate keeps its dates and history; removing one deletes them.", size=13, color=ft.Colors.ON_SURFACE_VARIANT),
                 column,
                 ft.Row([ft.TextButton("Add gate", icon=ft.Icons.ADD, on_click=add),
                         ft.TextButton("Reset to default", icon=ft.Icons.RESTART_ALT, on_click=reset,
                                       tooltip=" → ".join(core.DEFAULT_GATES))]),
                 error,
-            ], tight=True, spacing=12), width=520),
+            ], tight=True, spacing=12, scroll=ft.ScrollMode.AUTO), width=680),
             actions=[ft.TextButton("Cancel", on_click=lambda e: self.page.pop_dialog()), ft.FilledButton("Save", on_click=save)],
         ))
 
     def commit(self, team, change, dialog=True):
         """Apply a change to a subteam and save it; on failure undo it (and reload if someone else saved first)."""
-        backup = copy.deepcopy((team.parts, team.actions, team.log, team.gates))
+        backup = copy.deepcopy((team.parts, team.actions, team.gates, team.after, team.due_before))
         change()
         try:
             core.save_subteam(team)
         except core.SaveError as e:
-            team.parts, team.actions, team.log, team.gates = backup
+            team.parts, team.actions, team.gates, team.after, team.due_before = backup
             if dialog:
                 self.page.pop_dialog()
             self.toast(str(e), error=True)
@@ -935,7 +1122,7 @@ class TrackerApp:
             save_config(cfg)
             self.show("keydates")
 
-        sub = "Competition deadlines, design reviews and milestones, and who's responsible for each." + (
+        sub = "Competition deadlines, design reviews, milestones, freezes, blackouts and events, and who's responsible." + (
             "" if can_edit else "  View only: the PM/captain edits these.")
         content = ft.Column([
             heading("Key dates", sub),
@@ -948,22 +1135,32 @@ class TrackerApp:
     def edit_key_date(self, index):
         kd = self.tracker.key_dates[index] if index is not None else core.KeyDate()
         event = ft.TextField(label="Event", value=kd.event, autofocus=True)
-        when = date_field(self.page, "Date", kd.date, False)
-        kind = ft.SegmentedButton(selected=[kd.type if kd.type in core.KEY_DATE_TYPES else "Deadline"], show_selected_icon=False,
-                                  segments=[ft.Segment(value=t, label=ft.Text(t), icon=ft.Icon(TYPE_ICONS[t])) for t in core.KEY_DATE_TYPES])
+        kind = ft.Dropdown(label="Type", value=kd.type if kd.type in core.KEY_DATE_TYPES else "Deadline", expand=True,
+                           options=[ft.DropdownOption(key=t, text=t) for t in core.KEY_DATE_TYPES])
+        track = ft.Dropdown(label="Track", value=kd.track or "", expand=True,
+                            options=[ft.DropdownOption(key="", text="—")] + [ft.DropdownOption(key=t, text=t) for t in core.TRACKS])
+        when = date_field(self.page, "Date (official)", kd.date, False)
+        end = date_field(self.page, "End date (for a period)", kd.end, False)
+        internal = date_field(self.page, "Internal deadline", kd.internal, False)
+        competition = ft.TextField(label="Competition", value=kd.competition, expand=True)
         people = ft.TextField(label="People responsible", value=", ".join(kd.people), hint_text="e.g. Sam, Alex")
+        notes = ft.TextField(label="Notes", value=kd.notes, multiline=True, min_lines=2, max_lines=5)
         done = ft.Switch(label="Done (submitted / met)", value=kd.done)
 
         def save(e):
             try:
-                d = when.parse()
+                d, e_, i_ = when.parse(), end.parse(), internal.parse()
             except ValueError as err:
                 self.toast(str(err), error=True)
                 return
             if not event.value.strip() or d is None:
                 self.toast("An event needs a name and a date.", error=True)
                 return
-            new = core.KeyDate(d, event.value.strip(), kind.selected[0], core.split_names(people.value), done.value)
+            if e_ and e_ < d:
+                self.toast("The end date is before the start date.", error=True)
+                return
+            new = core.KeyDate(d, event.value.strip(), kind.value or "Deadline", core.split_names(people.value), done.value, i_, e_,
+                               track.value or "", competition.value.strip(), notes.value.strip())
             self.commit_key_dates(lambda: self.tracker.key_dates.__setitem__(index, new) if index is not None
                                   else self.tracker.key_dates.append(new))
 
@@ -973,8 +1170,12 @@ class TrackerApp:
                                             on_click=lambda e: self.commit_key_dates(lambda: self.tracker.key_dates.pop(index))))
         self.page.show_dialog(ft.AlertDialog(
             title=ft.Text("Edit date" if index is not None else "New date"),
-            content=ft.Container(ft.Column([event, when.control, kind, people, done], tight=True, spacing=12,
-                                           horizontal_alignment=ft.CrossAxisAlignment.STRETCH), width=520),
+            content=ft.Container(ft.Column([
+                event, ft.Row([kind, track]),
+                ft.Row([ft.Container(when.control, expand=1), ft.Container(end.control, expand=1)]),
+                ft.Row([ft.Container(internal.control, expand=1), competition]),
+                people, notes, done,
+            ], tight=True, spacing=12, scroll=ft.ScrollMode.AUTO, horizontal_alignment=ft.CrossAxisAlignment.STRETCH), width=600),
             actions=actions,
         ))
 
@@ -997,9 +1198,10 @@ class TrackerApp:
 class date_field:
     """A text field (yyyy-mm-dd) with a calendar button."""
 
-    def __init__(self, page, label, value, read_only):
+    def __init__(self, page, label, value, read_only, on_change=None):
+        self.on_change = on_change
         self.field = ft.TextField(label=label, value=value.isoformat() if value else "", hint_text="yyyy-mm-dd",
-                                  read_only=read_only, expand=True, dense=True)
+                                  read_only=read_only, expand=True, dense=True, on_blur=lambda e: on_change and on_change())
         picker = ft.DatePicker(value=datetime.combine(value or date.today(), datetime.min.time()),
                                first_date=datetime(2020, 1, 1), last_date=datetime(2035, 12, 31), on_change=self._picked)
         button = ft.IconButton(ft.Icons.CALENDAR_MONTH, tooltip="Pick a date", disabled=read_only,
@@ -1010,6 +1212,8 @@ class date_field:
         v = e.control.value
         self.field.value = (v.date() if isinstance(v, datetime) else v).isoformat()
         self.field.update()
+        if self.on_change:
+            self.on_change()
 
     def parse(self):
         text = (self.field.value or "").strip()

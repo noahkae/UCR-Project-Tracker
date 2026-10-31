@@ -4,8 +4,9 @@
     py export_gantt.py --subteams Aero Suspension        # only some subteams
     py export_gantt.py --out "UCR-04 Gantt.pdf" --car UCR-04 --no-open
 
-Each part is a row. Its gates are bars that run from the previous gate's due date
-to this gate's due date: white = passed, red = current gate, outline = still to come.
+Each part is a row. Its gates are bars that run from the due date of the gates they come after
+to their own due date: white = passed, red = being worked on, outline = still to come. Gates that
+run in parallel share the row in thinner lanes; skipped gates aren't drawn.
 Diamonds show when a gate was actually passed (from the Gate Log): white if on time,
 red if late, with a line back to the due date. Dashed lines are key dates, with design
 reviews in red. The Milestone key dates form the timeline in the header.
@@ -93,25 +94,35 @@ def rows_per_page(first):
     return int((PAGE_H - top - 0.35 - STRIP_H - BOTTOM) / ROW_H)
 
 
-def gate_spans(part, gates):
-    """(gate, start, due) for every gate with a due date; a bar starts at the previous gate's due date."""
-    spans, prev = [], None
-    for g in gates:
+def gate_spans(part, team):
+    """(gate, start, due, lane, lanes) for every gate with a due date that isn't skipped. A bar starts at the latest due
+    date of the gates it comes after; bars that overlap in time get their own lane."""
+    spans = []
+    for g in team.gates:
         due = part.dates.get(g)
-        if due is None:
+        if due is None or g in part.skipped:
             continue
+        before = [part.dates[a] for a in team.after.get(g, []) if part.dates.get(a) and a not in part.skipped]
+        prev = max(before) if before else None
         start = prev if prev and prev < due else due - timedelta(days=14 if prev is None else 3)
-        spans.append((g, start, due))
-        prev = due
-    return spans
+        spans.append([g, start, due])
+    lanes = []  # end date of the last bar in each lane
+    for span in sorted(spans, key=lambda sp: sp[1]):
+        lane = next((i for i, end in enumerate(lanes) if end <= span[1]), len(lanes))
+        if lane == len(lanes):
+            lanes.append(span[2])
+        else:
+            lanes[lane] = span[2]
+        span.append(lane)
+    return [(g, start, due, lane, max(len(lanes), 1)) for g, start, due, lane in spans]
 
 
 def date_range(tracker, rows, start, end):
     dates = [k.date for k in tracker.key_dates if k.date]
     for kind, team, part in rows:
         if kind == "part":
-            dates += [s for _, s, _ in gate_spans(part, team.gates)] + [d for d in part.dates.values() if d]
-            dates += [e.passed for e in team.log if e.part == part.key]
+            dates += [sp[1] for sp in gate_spans(part, team)] + [d for d in part.dates.values() if d]
+            dates += [p for p, _ in part.passed.values() if p]
     dates.append(date.today())
     lo = start or min(dates) - timedelta(days=7)
     hi = end or max(dates) + timedelta(days=10)
@@ -213,26 +224,25 @@ def chart(fig, rows, top, lo, hi, key_dates, today):
 
 
 def draw_part(ax, team, part, y, days_per_inch):
-    gates = team.gates
-    passed, _ = core.progress(part, gates)
-    current = core.current_gate(part, gates)
-    spans = gate_spans(part, gates)
+    active = core.active_gates(part, team)
+    spans = gate_spans(part, team)
     if not spans:
         ax.text(ax.get_xlim()[0], y, "  no dates yet", va="center", fontsize=7, style="italic", color=FAINT)
-    for g, start, due in spans:
-        i = gates.index(g)
-        if i < passed:
+    for g, start, due, lane, lanes in spans:
+        if g in part.passed:
             face, edge, text = FG, FG, BG
-        elif g == current:
+        elif g in active:
             face, edge, text = RED, RED, FG
         else:
             face, edge, text = "none", MUTED, MUTED
+        h = 0.6 / lanes
         x0, x1 = mdates.date2num(start), mdates.date2num(due)
-        ax.add_patch(Rectangle((x0, y - 0.3), x1 - x0, 0.6, facecolor=face, edgecolor=edge, lw=0.7, zorder=3))
+        ax.add_patch(Rectangle((x0, y - 0.3 + lane * h), x1 - x0, h, facecolor=face, edgecolor=edge, lw=0.7, zorder=3))
         room = (due - start).days / days_per_inch  # bar width in inches
         name = g if len(g) * 0.055 < room - 0.06 else (g.split()[0] if len(g.split()[0]) * 0.055 < room - 0.06 else "")
         if name:
-            ax.text((x0 + x1) / 2, y, name, ha="center", va="center", fontsize=6.5, color=text, zorder=4, clip_on=True)
+            ax.text((x0 + x1) / 2, y - 0.3 + (lane + 0.5) * h, name, ha="center", va="center", fontsize=6.5 if lanes == 1 else 5,
+                    color=text, zorder=4, clip_on=True)
     for e in team.log:
         if e.part != part.key or not e.passed:
             continue
@@ -265,15 +275,22 @@ def key_date_strip(fig, top, lo, hi, key_dates, today):
     ax.axis("off")
     ax.text(-LABEL_W / width, 0.5, "Key dates", transform=ax.transAxes, ha="left", va="center", fontsize=10, fontweight="bold", color=RED)
     days_per_inch = (hi - lo).days / width
+    by_day = {}
+    for k in sorted((k for k in key_dates if k.date and lo <= k.date <= hi), key=lambda k: (k.date, k.type != "Design Review")):
+        by_day.setdefault(k.date, []).append(k)
     last_x, level = None, 0
-    for k in sorted((k for k in key_dates if k.date and lo <= k.date <= hi), key=lambda k: k.date):
-        review = k.type == "Design Review"
-        x = mdates.date2num(k.date)
-        # stagger labels that would sit on top of the previous one
-        level = level + 1 if last_x is not None and (x - last_x) / days_per_inch < 0.22 and level < 2 else 0
-        last_x = x
+    for day, ks in by_day.items():
+        review = any(k.type == "Design Review" for k in ks)
+        x = mdates.date2num(day)
         ax.scatter([x], [0.75], marker="D" if review else "o", s=26, color=RED if review else MUTED, zorder=3)
-        ax.text(x, 0.45 - level * 0.6, k.event if len(k.event) <= 28 else k.event[:27] + "…", rotation=35, ha="right", va="top",
+        # stagger labels that would sit on top of the previous one; past a second level, leave the dot unlabelled
+        close = last_x is not None and (x - last_x) / days_per_inch < 0.22
+        if close and level >= 1:
+            continue
+        level = level + 1 if close else 0
+        last_x = x
+        name = ks[0].event if len(ks[0].event) <= 26 else ks[0].event[:25] + "…"
+        ax.text(x, 0.45 - level * 0.6, name + (f" +{len(ks) - 1}" if len(ks) > 1 else ""), rotation=35, ha="right", va="top",
                 fontsize=6.5, color=FG if review else MUTED, rotation_mode="anchor")
     if lo <= today <= hi:
         ax.text(mdates.date2num(today), 1.0, "Today", ha="center", va="bottom", fontsize=7, fontweight="bold", color=RED)

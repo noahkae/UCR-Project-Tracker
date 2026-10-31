@@ -134,41 +134,50 @@ undoes the change and reloads.
   * **Needs attention**: late, *At risk* or *Blocked* parts; overdue actions; and key dates that are overdue or due within 7 days;
   * **Next 14 days**: gates, actions and key dates coming up;
   * the **next design review**, in the subtitle.
-* **My work**: pick your name once (it's remembered) to see **your parts, your open actions and the key dates you're
-  responsible for**, with anything late at the top. Key dates you're named on carry a **You** tag everywhere in the app.
+* **My work**: pick your name once (it's remembered) to see **the parts you own or work on, your open actions and the key
+  dates you're responsible for**, with anything late at the top. Key dates you're named on carry a **You** tag everywhere in the app.
 * **Subteam tabs** (left rail) show:
-  * the subteam's parts, sorted with problems first. The dots show gate progress: filled = passed, ringed = current.
-    Use the filter box to search by part, owner or note. Click a part to see its details and **gate history**;
+  * the subteam's parts, sorted with problems first. The dots show each gate: filled = passed, ringed = being worked on
+    (several at once when gates run in parallel), hollow grey = skipped, faint = waiting. ⚠ marks a part whose dates break a
+    gate rule (hover to see which). Under the name are its **tags**; under the owner, anyone else working on it.
+    Filter by text (part, person, tag or note) or click a **tag** chip. Click a part to see its details;
   * its **actions**, open ones first;
   * how many gates it has passed **on time**, in the subtitle.
 * **Calendar** is a month view of every gate due date, action and key date.
   * Use the chips at the top to show or hide each subteam, key dates and actions. Your choice is remembered.
   * Colours: red = late, amber = due soon, green = on track, grey = done, blue = a gate still to come, purple = an upcoming design review.
   * Click an item to open it, or click a busy day to see everything on it. Use ‹ › to change month and *Today* to jump back.
-* **Key dates** lists competition deadlines, design reviews (gate meetings) and milestones, with the people responsible for each.
-  Overdue ones stay visible until marked done. Turn on *Show past* to see the rest.
+* **Key dates** lists competition deadlines, design reviews (gate meetings), milestones, freezes, blackouts and events, with the
+  official date, the team's **internal deadline**, track, competition, notes and the people responsible. Overdue ones stay
+  visible until marked done. Turn on *Show past* to see the rest. The calendar shows internal deadlines (⏱) and spans
+  blackouts and multi-day events across their days.
 * **↻** reloads the files (do this after a lead says they've updated). **☾** switches between light and dark mode.
 
 ### Subteam leads (your tab shows "You can edit")
 
 * **Edit gates** (top of your subteam page) changes the gates your parts move through: rename, add, remove or reorder them,
   or **Reset to default** (DR01 - Concept → DR02 - Detailed Design → DR03 - Final Design → Manufacturing → Testing).
-  Renamed gates keep their due dates and history. Removing a gate deletes its due dates, and parts that were at it move
-  to the next gate they haven't passed. The app rebuilds the Plan sheet so Excel's dropdown and highlighting match.
-* **Add part** (bottom-right button): give it a name and owner, then fill in a **due date for each gate**.
+  * **Comes after** (chips under each gate): the gates that must be passed or skipped before this one starts. Gates with
+    the same prerequisites **run in parallel**, e.g. Aero's Mould Design only needs CFD Freeze, while Mounting Design
+    needs CFD Freeze *and* Mounting Concept. A gate can only come after gates above it in the list.
+  * **Due before**: a key date (e.g. *Chassis Freeze*) the gate must be due before. Parts whose date for that gate is later
+    get a ⚠ warning. Gates due inside a *Blackout* key date get one too, as do gates due before a gate they come after.
+  * Renamed gates keep their due dates and history; removing a gate deletes them.
+* **Add part** (bottom-right button): give it a name, an **owner** (the one accountable person), anyone else **working on it**,
+  any **tags** (e.g. *Development*, *Aero-Testing*; click a suggested tag to add it), then a **due date for each gate**.
 * **Sub-parts:** to keep big assemblies tidy, open a part (e.g. Front Wing) and click **Add sub-part**, or set *Sub-part of*
   when editing. Parts with sub-parts show collapsed with a summary ("8 sub-parts · 1 need attention"); click the arrow to
   expand. An assembly sorts by its worst sub-part, so problems still float to the top. Sub-parts go one level deep.
 * **Click a part** to edit it:
-  * **Gate passed** moves the part to its next gate (after the last gate it becomes *Done*). When you save, the app
-    records the date the gate was passed in the part's **gate history** and works out whether it was early or late.
-    Moving a part back un-records those gates;
+  * each **gate** has its own row: **Passed** on a gate being worked on records today as its pass date (edit the date if it
+    was passed earlier), **Undo** un-passes it (and anything after it), and **Skip** marks a gate that doesn't apply to this
+    part (e.g. no mould for a mounting bracket). The app shows whether each pass was early or late;
   * **Flag** marks the part as *At risk* or *Blocked*. It then appears under *Needs attention*, so raise it at the next meeting;
   * **Notes** is a one-line reason, e.g. "waiting on supplier".
 * **Actions** (follow-ups from design reviews):
   * *Add action* on your subteam page. Give each action one owner, a due date, the part it relates to, and where it came from (e.g. "DR2");
   * tick the box when it's done. Overdue actions show under *Needs attention*, and the owner sees them under *My work*.
-* **Weekly habit:** before the leads meeting, update each part's current gate, dates and flag, and tick off finished actions. It takes about 5 minutes.
+* **Weekly habit:** before the leads meeting, pass finished gates, update dates and flags, and tick off finished actions. It takes about 5 minutes.
 
 ### PM / captain
 
@@ -176,6 +185,9 @@ undoes the change and reloads.
   * Use the *Design Review* type for gate meetings (e.g. "DR2: Aero + Suspension").
   * Fill in **People responsible** (comma-separated names, spelt the same way as in the subteam files, e.g. "Sam Lee, Alex Kim").
     They'll see the date in *My work*, and it shows under *Needs attention* from 7 days before.
+  * Set an **Internal deadline** when the team works to an earlier date than the official one; status and reminders follow it.
+  * Use **Freeze** for design freezes (gates can be tied to them), **Blackout** with an *End date* for periods with no gate
+    dates (e.g. finals), and **Event** for things that just happen. Add the **Track**, **Competition** and any **Notes**.
   * Tick **Done** once a deadline is submitted or a milestone met. Until then, a past deadline shows as **late**.
     Design reviews don't need ticking; once the date has passed they count as held.
 * **`Master.xlsx > All Parts` and `All Actions`** are rebuilt automatically whenever someone with edit access to the master saves anything.
@@ -206,7 +218,8 @@ It reads the tracker folder the app last used, writes `Gantt <date>.pdf` to your
 How to read it:
 * **Header timeline:** the *Milestone* key dates. Red up to now, a ringed dot for the next milestone, white after that.
 * **Rows:** one per part, grouped by subteam.
-* **Bars:** each gate is a bar from the previous gate's due date to its own due date. White = passed, red = current gate, outline = still to come.
+* **Bars:** each gate is a bar from the due date of the gates it comes after to its own due date. White = passed, red = being
+  worked on, outline = still to come. Gates that run in parallel share the part's row in thinner lanes; skipped gates aren't drawn.
 * **◆ diamonds:** when a gate was *actually* passed, from the gate history. White = on time or early; red = late, with a line back to the due date. This is the "in hindsight" part.
 * **Dashed lines:** key dates, with design reviews in red. The **Key dates** strip underneath names them.
 * **Solid red line:** today.
@@ -215,15 +228,16 @@ How to read it:
 
 ## 5. How status is worked out
 
-Each part has a **current gate**, the gate it's working towards. Every gate to its left counts as passed.
+Each gate of a part is **passed**, **skipped**, **being worked on** (everything it comes after is passed or skipped), or
+**waiting**. The part's *current gate* is the gate(s) being worked on, and its status uses the earliest due date among them.
 
 | Status | Meaning |
 |---|---|
-| **Late** | today is past the current gate's due date |
-| **Due soon** | the current gate is due within 7 days |
-| **On track** | the current gate is due later than that |
-| **No date** | the current gate has no due date yet |
-| **Done** | the current gate is set to *Done* |
+| **Late** | today is past the due date of a gate being worked on |
+| **Due soon** | a gate being worked on is due within 7 days |
+| **On track** | they're due later than that |
+| **No date** | the gates being worked on have no due dates yet |
+| **Done** | every gate is passed or skipped |
 
 **Flags** are separate from status and set by the lead:
 * **OK**
@@ -232,8 +246,9 @@ Each part has a **current gate**, the gate it's working towards. Every gate to i
 
 **Actions and key dates** follow the same Late / Due soon / On track rules, based on their own due date.
 * An action is *Done* once it's ticked.
-* A deadline or milestone is *Done* once the PM ticks it.
-* A design review that has happened shows as *Held*.
+* A deadline, milestone or freeze is *Done* once the PM ticks it; until then it's measured against the internal deadline
+  if there is one.
+* A design review, blackout or event shows as *Now* while it's on and *Held* once it's over.
 
 **On time** (subteam subtitle) counts the gates passed on or before their due date, out of all gates passed that had a due date.
 
@@ -241,26 +256,32 @@ Each part has a **current gate**, the gate it's working towards. Every gate to i
 
 ## 6. Editing in Excel instead
 
-Leads can also edit their file directly in Excel (desktop or browser). Each subteam file has three sheets:
+Leads can also edit their file directly in Excel (desktop or browser). Each subteam file has four sheets:
 
 * **Plan**: the parts (below). This is the one you'd normally edit.
 * **Actions**: `Action | Part | Owner | Due | From | Closed`. A row is done once *Closed* has a date.
-* **Gate Log**: `Part | Gate | Due | Passed`. The app fills this in when a gate is passed, so there's no need to edit it.
-  Changing *Current Gate* directly in Excel does **not** add to the log; use the app for that.
+* **Gate Log**: `Part | Gate | Due | Passed`. The app writes this when a gate is passed. A blank *Passed* means the gate was
+  passed before the app recorded it.
+* **Gates**: `Gate | After | Due before`. *After* lists (comma-separated) the gates that come first; blank = can start any time.
+  *Due before* names a key date. Edit this with **Edit gates** in the app rather than by hand.
 
-The master's **Key Dates** sheet is `Date | Event | Type | People | Done`.
+The master's **Key Dates** sheet is `Date | Event | Type | People | Done | Internal deadline | End date | Track | Competition | Notes`.
 
 The **Plan** sheet looks like this:
 
-| Part | Parent | Owner | Current Gate | Flag | Notes | DR01 - Concept | DR02 - Detailed Design | DR03 - Final Design | Manufacturing | Testing |
-|---|---|---|---|---|---|---|---|---|---|---|
-| Front Wing | | Sam | DR02 - Detailed Design | OK | | 2026-10-11 | 2026-10-28 | 2026-11-10 | 2026-11-30 | 2026-12-20 |
-| Element 1 | Front Wing | Alex | DR01 - Concept | OK | | 2026-10-04 | 2026-10-25 | 2026-11-08 | 2026-11-28 | 2026-12-18 |
+| Part | Parent | Owner | Assignees | Tags | Current Gate | Flag | Notes | DR01 - Concept | DR02 - Detailed Design | DR03 - Final Design | Manufacturing | Testing |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Front Wing | | Sam | Yi, Alex | Car | DR02 - Detailed Design | OK | | 2026-10-11 | 2026-10-28 | 2026-11-10 | 2026-11-30 | 2026-12-20 |
+| Element 1 | Front Wing | Alex | | Composites | DR01 - Concept | OK | | 2026-10-04 | 2026-10-25 | N/A | 2026-11-28 | 2026-12-18 |
 
-* *Current Gate*, *Flag* and *Parent* are dropdowns. *Parent* is blank for a top-level part; for a sub-part it's the
-  name of the part it belongs to. Files made before sub-parts existed get the *Parent* column the next time the app saves them.
+* *Parent* is blank for a top-level part; for a sub-part it's the name of the part it belongs to. *Assignees* and *Tags* are comma-separated.
+* *Current Gate* lists the gate(s) being worked on, comma-separated, or *Done*. The app writes it; if you change it by hand,
+  the app counts every gate before the ones you list as passed.
+* The gate columns hold due dates, or **N/A** for a gate the part skips. Excel highlights the gates being worked on and turns
+  them red when overdue, and greys out skipped gates and finished parts.
 * The **Actions** and **Gate Log** sheets refer to a sub-part by its full name, e.g. `Front Wing / Element 1`.
-* The gate columns hold due dates. Excel greys out passed gates, highlights the current one, and turns it red when overdue.
+* Files made by older versions (fewer columns, no Gates sheet) still open; they're upgraded the next time the app saves them,
+  and their gates run one after another until a lead changes that in **Edit gates**.
 
 ---
 
