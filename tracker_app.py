@@ -26,6 +26,7 @@ from tracker_core import load_config, save_config
 ASSETS = Path(__file__).resolve().parent / "assets"
 LOOK_AHEAD_DAYS = 14
 FIXED_VIEWS = ["overview", "mywork", "calendar", "keydates", "gates"]
+RAIL_VIEWS = FIXED_VIEWS[:4]  # the rail's own destinations; Gates opens from the settings menu
 SUBVIEWS = ["List", "Grid", "Design reviews"]
 SUBTEAM_EMOJI = {  # matched against the start of the subteam's file name
     "aero": "🪽", "suspension": "🛞", "chassis": "🏎️", "powertrain": "🔋",
@@ -213,12 +214,11 @@ class TrackerApp:
             label_type=ft.NavigationRailLabelType.ALL, min_width=96, group_alignment=-0.9, scrollable=True, on_change=self.on_nav,
             leading=ft.Container(ft.Column([ft.Image(src="icon.png", width=36, height=36, border_radius=5), self.car_button],
                                            spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER), padding=ft.Padding.only(top=8)),
-            trailing=ft.Column([
+            trailing=ft.Container(ft.Column([
                 ft.IconButton(ft.Icons.REFRESH, tooltip="Reload files", on_click=lambda e: self.reload()),
-                ft.IconButton(ft.Icons.DARK_MODE_OUTLINED, tooltip="Light / dark", on_click=self.toggle_theme),
-                ft.IconButton(ft.Icons.FOLDER_OPEN_OUTLINED, tooltip=f"Tracker folder: {self.folder}\nClick to change",
-                              on_click=lambda e: on_change_folder()) if on_change_folder else ft.Container(),
-            ]),
+                self.settings_menu(on_change_folder),
+            ], spacing=4, horizontal_alignment=ft.CrossAxisAlignment.CENTER), padding=ft.Padding.only(bottom=12)),
+            pin_trailing_to_bottom=True,
         )
         self.body = ft.Container(expand=True, padding=24)
         page.add(ft.Row([self.rail, ft.VerticalDivider(width=1), self.body], expand=True))
@@ -237,7 +237,6 @@ class TrackerApp:
             ft.NavigationRailDestination(icon=ft.Icons.PERSON_OUTLINE, selected_icon=ft.Icons.PERSON, label="My work"),
             ft.NavigationRailDestination(icon=ft.Icons.CALENDAR_MONTH_OUTLINED, selected_icon=ft.Icons.CALENDAR_MONTH, label="Calendar"),
             ft.NavigationRailDestination(icon=ft.Icons.EVENT_OUTLINED, selected_icon=ft.Icons.EVENT, label="Key dates"),
-            ft.NavigationRailDestination(icon=ft.Icons.ACCOUNT_TREE_OUTLINED, selected_icon=ft.Icons.ACCOUNT_TREE, label="Gates"),
         ] + [
             ft.NavigationRailDestination(icon=ft.Text(emoji(t.name), size=22), label=_short(t.name))
             for t in self.tracker.subteams
@@ -273,16 +272,16 @@ class TrackerApp:
 
     def on_nav(self, e):
         i = e.control.selected_index
-        self.show(FIXED_VIEWS[i] if i < len(FIXED_VIEWS) else self.tracker.subteams[i - len(FIXED_VIEWS)].name)
+        self.show(RAIL_VIEWS[i] if i < len(RAIL_VIEWS) else self.tracker.subteams[i - len(RAIL_VIEWS)].name)
 
     def show(self, view):
         self.view = view
         if view in FIXED_VIEWS:
-            index = FIXED_VIEWS.index(view)
+            index = RAIL_VIEWS.index(view) if view in RAIL_VIEWS else None  # Gates lives in the settings menu, not the rail
             content = {"overview": self.overview, "mywork": self.my_work, "calendar": self.calendar_view,
                        "keydates": self.key_dates_view, "gates": self.gates_view}[view]()
         else:
-            index = [t.name for t in self.tracker.subteams].index(view) + len(FIXED_VIEWS)
+            index = [t.name for t in self.tracker.subteams].index(view) + len(RAIL_VIEWS)
             content = self.subteam_view(self.team(view))
         self.rail.selected_index = index
         self.page.floating_action_button = content[1]
@@ -294,9 +293,33 @@ class TrackerApp:
         if self.view not in FIXED_VIEWS and self.part_widths and (self.table_notes_width() is None) != (self.notes_width is None):
             self.show(self.view)
 
+    def settings_menu(self, on_change_folder):
+        """Material settings menu at the foot of the rail: night mode, the tracker folder, and the Gates page."""
+        # The switch only shows the state: a tap anywhere on the row closes the menu, then switches the theme
+        # (an open menu keeps the old theme's colours, so toggling it in place leaves the menu unreadable).
+        self.night_switch = ft.Switch(value=self.page.theme_mode == ft.ThemeMode.DARK, scale=0.8)
+        night = ft.Container(self.night_switch, ignore_interactions=True)
+
+        def item(icon, label, on_click, trailing=None, sub=None):
+            text = ft.Column([ft.Text(label), ft.Text(sub, size=12, color=ft.Colors.ON_SURFACE_VARIANT, max_lines=1,
+                                                      overflow=ft.TextOverflow.ELLIPSIS, width=220)] if sub else [ft.Text(label)],
+                             spacing=0, tight=True)
+            return ft.PopupMenuItem(content=ft.Row([ft.Icon(icon, color=ft.Colors.ON_SURFACE_VARIANT, size=20),
+                                                    ft.Container(text, expand=True)] + ([trailing] if trailing else []),
+                                                   spacing=12, width=280), on_click=on_click)
+
+        items = [item(ft.Icons.DARK_MODE_OUTLINED, "Night mode", self.toggle_theme, trailing=night)]
+        if on_change_folder:
+            items.append(item(ft.Icons.FOLDER_OPEN_OUTLINED, "Tracker folder", lambda e: on_change_folder(), sub=str(self.folder)))
+        items += [ft.PopupMenuItem(),  # divider
+                  item(ft.Icons.ACCOUNT_TREE_OUTLINED, "Gates", lambda e: self.show("gates"), sub="Gate templates and library")]
+        return ft.PopupMenuButton(icon=ft.Icons.SETTINGS_OUTLINED, tooltip="Settings", items=items,
+                                  menu_position=ft.PopupMenuPosition.OVER, bgcolor=ft.Colors.SURFACE_CONTAINER)
+
     def toggle_theme(self, e):
         dark = self.page.theme_mode != ft.ThemeMode.DARK
         self.page.theme_mode = ft.ThemeMode.DARK if dark else ft.ThemeMode.LIGHT
+        self.night_switch.value = dark
         use_mode(dark)
         cfg = load_config()
         cfg["dark"] = dark
@@ -1765,7 +1788,8 @@ def main(page: ft.Page, folder=None, start=None):
     threading.Thread(target=sharpen_window_icon, args=(page.title, ASSETS / "icon.ico"), daemon=True).start()
     page.window.width, page.window.height = 1280, 820
     page.window.min_width, page.window.min_height = 720, 520
-    page.window.alignment = ft.Alignment.CENTER
+    page.window.alignment = ft.Alignment.CENTER  # the size and place it restores to
+    page.window.maximized = True
 
     def open_tracker(path):
         cfg = load_config()

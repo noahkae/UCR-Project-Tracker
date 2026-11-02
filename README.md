@@ -121,8 +121,8 @@ C:\Users\<you>\OneDrive - University of Calgary\UCalgary-Racing - Documents\Proj
 * If it isn't (e.g. the shortcut hasn't been added yet), the screen explains how to add it.
 * Either way you can **Browse** to any other folder instead.
 
-The app remembers your choice. To switch later, click the **folder** button at the bottom of the left rail; hovering over it
-shows the current folder.
+The app remembers your choice. To switch later, open **Settings** (⚙ at the bottom of the left rail) and click **Tracker
+folder**; the current folder is shown under it.
 
 When the app loads, it checks each file by opening it for writing (nothing is written). Files you only have View access to
 show as **View only**, so you can't change them by accident. If a save is still refused, the app says **Edit failed**,
@@ -161,11 +161,12 @@ undoes the change and reloads.
   official date, the team's **internal deadline**, track, competition, notes and the people responsible. Overdue ones stay
   visible until marked done. Turn on *Show past* to see the rest. The calendar shows internal deadlines (⏱) and spans
   blackouts and multi-day events across their days.
-* **Gates** (left rail) lists every **gate template** (the workflows parts move through) and the **gate library** they're
+* **Gates** (under ⚙ Settings, or *Gate templates* on a subteam page) lists every **gate template** (the workflows parts move through) and the **gate library** they're
   built from: each gate's code, name, designation (*General* or a sub-team), description, and **Used in** (how many
   templates and items use it). Click a template or gate to see or edit it.
 * **The car** (e.g. *UCR-04*) shows under the logo. Click it to switch to another car's tracker, or start the next one.
-* **↻** reloads the files (do this after a lead says they've updated). **☾** switches between light and dark mode.
+* **↻** reloads the files (do this after a lead says they've updated). **⚙ Settings** (bottom of
+  the rail) holds the **Night mode** switch, the **Tracker folder** and **Gates**.
 
 ### Subteam leads (your tab shows "You can edit")
 

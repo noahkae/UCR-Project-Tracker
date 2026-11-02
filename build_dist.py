@@ -1,4 +1,4 @@
-"""Build the single file to share: dist/UCR Project Tracker.pyzw
+"""Build the single file to share: dist/UCR Project Tracker (expanded).pyzw
 
     py build_dist.py
 
@@ -17,7 +17,7 @@ FILES = [
     "launcher.py", "tracker_app.py", "tracker_core.py", "export_gantt.py", "setup_tracker.py",
     "requirements.txt", "assets/icon.ico", "assets/icon.png", "assets/logo.png",
 ]
-OUT = ROOT / "dist" / "UCR Project Tracker.pyzw"
+OUT = ROOT / "dist" / "UCR Project Tracker (expanded).pyzw"
 
 
 def main():
