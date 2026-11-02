@@ -139,8 +139,9 @@ undoes the change and reloads.
   * **Needs attention**: late, *At risk* or *Blocked* parts; overdue actions; and key dates that are overdue or due within 7 days;
   * **Next 14 days**: gates, actions and key dates coming up;
   * the **next design review**, in the subtitle.
-* **My work**: pick your name once (it's remembered) to see **the parts you own or work on, your open actions and the key
-  dates you're responsible for**, with anything late at the top. Key dates you're named on carry a **You** tag everywhere in the app.
+* **My work**: pick your name once (it's remembered) to see **the parts you own or work on, your open actions, and the key
+  dates you're responsible for**, with anything late at the top. Your parts' upcoming design reviews are listed with your
+  key dates, in date order. Key dates you're named on carry a **You** tag everywhere in the app.
 * **Subteam tabs** (left rail) have three views (switch at the top right; your choice is remembered):
   * **List**: the parts, sorted with problems first. The dots show each gate of the part's template: filled = done,
     amber = in progress, ringed = ready to start (several at once when gates run in parallel), hollow grey = off,

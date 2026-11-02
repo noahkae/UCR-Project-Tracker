@@ -478,7 +478,7 @@ class TrackerApp:
 
         who = ft.Dropdown(label="I am…", value=self.me if self.me in names else None, width=320, enable_filter=True,
                           editable=True, options=[ft.DropdownOption(key=n, text=n) for n in names], on_select=pick)
-        header = ft.Row([heading("My work", "Parts you own or work on, your actions, and the key dates you're responsible for."), who],
+        header = ft.Row([heading("My work", "Parts you own or work on, your actions, and your key dates and design reviews."), who],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.START)
         if not self.me:
             return ft.Column([header, section("Get started", empty(
@@ -499,14 +499,16 @@ class TrackerApp:
             sum(core.action_status(a, today) == "Late" for _, a in actions) + \
             sum(core.key_date_needs_attention(k, today) for k in dates)
         summary = pill(f"{late} need attention", "Late") if late else pill("Nothing late", "On track")
+        # key dates and your parts' design reviews, in one list by date
+        upcoming = sorted([(k.date or date.max, self.key_date_tile(k, today)) for k in dates]
+                          + [(r.date or date.max, self.review_tile(t, r, today)) for t, r in reviews], key=lambda x: x[0])
         return ft.Column([
             header,
             ft.Row([summary]),
             section(f"My parts ({len(parts)})", ft.Column([self.part_tile(t, p, today) for t, p in parts]) if parts else empty("No open parts.")),
             section(f"My actions ({len(actions)})", ft.Column([self.action_tile(t, a, today) for t, a in actions]) if actions else empty("No open actions.")),
-            section(f"My key dates ({len(dates)})", ft.Column([self.key_date_tile(k, today) for k in dates]) if dates else empty("No upcoming key dates.")),
-            section(f"My design reviews ({len(reviews)})", ft.Column([self.review_tile(t, r, today) for t, r in reviews]) if reviews
-                    else empty("No design reviews scheduled for your parts.")),
+            section(f"My key dates ({len(upcoming)})", ft.Column([tile for _, tile in upcoming]) if upcoming
+                    else empty("No upcoming key dates or design reviews.")),
         ], spacing=20, scroll=ft.ScrollMode.AUTO), None
 
     def review_tile(self, team, review, today):
