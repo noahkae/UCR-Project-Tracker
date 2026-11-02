@@ -87,12 +87,12 @@ You only do this once per computer. It's Windows-first; Mac/Linux work too, see 
    * `--gates "DR01 - Concept" "DR02 - Detailed Design" ...` picks the gates of the general *Standard* template (in order).
    * `--car UCR-04` sets the car name (default: the folder name).
 
-   Later cars don't need this script: use **New car…** in the app (section 4).
+   Run it again for each new car (e.g. `--out "UCR-05"`); each car gets its own folder.
 
    The script refuses to overwrite an existing tracker.
 
 **2. Upload the tracker to SharePoint**, into **UCalgary-Racing → Documents → Project Management**, as its own folder
-   (`Project Management/UCR-04/`). Next year's `UCR-05/` goes next to it; the app's car switcher lists every car folder there.
+   (`Project Management/UCR-04/`). Next year's `UCR-05/` goes next to it; open it in the app with **⚙ Settings → Tracker folder**.
 
 **3. Set permissions** with *… → Manage access* on each file (or folder):
 
@@ -164,7 +164,7 @@ undoes the change and reloads.
 * **Gates** (under ⚙ Settings, or *Gate templates* on a subteam page) lists every **gate template** (the workflows parts move through) and the **gate library** they're
   built from: each gate's code, name, designation (*General* or a sub-team), description, and **Used in** (how many
   templates and items use it). Click a template or gate to see or edit it.
-* **The car** (e.g. *UCR-04*) shows under the logo. Click it to switch to another car's tracker, or start the next one.
+* **The car** (e.g. *UCR-04*) shows under the logo.
 * **↻** reloads the files (do this after a lead says they've updated). **⚙ Settings** (bottom of
   the rail) holds the **Night mode** switch, the **Tracker folder** and **Gates**.
 
@@ -214,12 +214,6 @@ undoes the change and reloads.
   * Tick **Done** once a deadline is submitted or a milestone met. Until then, a past deadline shows as **late**.
     Design reviews don't need ticking; once the date has passed they count as held.
 * **General gate library and templates** (*Gates* page) are yours to edit; sub-teams use them alongside their own.
-* **New sub-team** (Overview, top right): a name and a starting template. It creates `Subteams/<name>.xlsx`; on SharePoint,
-  give its lead Edit access to that file.
-* **New car…** (click the car name under the logo): starts the next car (e.g. *UCR-05*) as a new folder next to this one.
-  Choose what carries over: each sub-team's **assembly structure** (parts, sub-parts, templates, tags), the **gate library and
-  templates**, and the **key dates** (optionally moved a year later). Owners, dates and progress always start fresh. Set the
-  new folder's SharePoint permissions as in section 2.
 * **`Master.xlsx > All Parts` and `All Actions`** are rebuilt automatically whenever someone with edit access to the master saves anything.
   They let people without the app see everything in the browser. Don't edit those sheets by hand.
 * **In the meeting**, go through *Needs attention* first, then *Next 14 days*. Record each review's follow-ups as actions straight away.
@@ -330,7 +324,9 @@ The **Plan** sheet looks like this:
 * **Change a subteam's gates:** edit its template on the *Gates* page (see section 4).
   Files made with the original gates (*Concept*, *Detailed Design*, *Drawings*) show the DR01–DR03 names, and are
   updated to them the next time that subteam saves from the app.
-* **Add a subteam:** **New sub-team** on the Overview. To give it an emoji, add it to `SUBTEAM_EMOJI` in `tracker_app.py`;
+* **Add a subteam:** create an empty plan file in the tracker's `Subteams/` folder, e.g.
+  `py -c "import tracker_core as c; c.create_subteam_file(r'<tracker folder>\Subteams\Cooling.xlsx')"`, then give its
+  lead Edit access to it on SharePoint. To give it an emoji, add it to `SUBTEAM_EMOJI` in `tracker_app.py`;
   it shows 🔧 otherwise.
 * **Remove a subteam:** delete or move its file out of `Subteams/`.
 * **Change the "due soon" window:** `DUE_SOON_DAYS` in `tracker_core.py`.

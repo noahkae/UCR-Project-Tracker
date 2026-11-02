@@ -806,21 +806,6 @@ def find_folder():
     return None
 
 
-def cars_near(folder):
-    """[(car name, tracker folder)] for this tracker and the ones next to it (one folder per car), newest name last."""
-    folder = Path(folder)
-    found = [f.parent for f in folder.parent.glob(f"*/{MASTER}")] if folder.parent.is_dir() else []
-    found = list(dict.fromkeys(found + [folder]))
-    return sorted(((_car_name(f), f) for f in found), key=lambda cf: cf[0].casefold())
-
-
-def _car_name(folder):
-    try:
-        return _settings(load_workbook(Path(folder) / MASTER, read_only=True)).get("Car") or Path(folder).name
-    except Exception:  # noqa: BLE001 - an unreadable neighbour just shows by its folder name
-        return Path(folder).name
-
-
 def load(folder):
     folder = Path(folder)
     master = folder / MASTER
@@ -1123,22 +1108,6 @@ def create_subteam_file(path, gates=DEFAULT_GATES, template=None, default=""):
     _save_atomic(wb, Path(path))
 
 
-def create_subteam(tracker, name, template_name=""):
-    """Add a subteam file to the tracker. Returns its path; refuses an existing name."""
-    name = name.strip()
-    if not name or any(c in name for c in '\\/:*?"<>|'):
-        raise ValueError("Give the sub-team a name without \\ / : * ? \" < > |.")
-    path = tracker.folder / SUBTEAM_DIR / f"{name}.xlsx"
-    if path.exists() or any(t.name.casefold() == name.casefold() for t in tracker.subteams):
-        raise ValueError(f"There's already a sub-team called {name}.")
-    available = {**tracker.templates, **{n: t for n, (t, _) in all_templates(tracker).items()}}
-    t = available.get(template_name) or tracker.templates.get(DEFAULT_TEMPLATE) or standard_template()
-    own = None if t.name in tracker.templates else Template(t.name, name, list(t.gates), dict(t.after), dict(t.due_before))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    create_subteam_file(path, t.gates, own, t.name)
-    return path
-
-
 def create_master(path, car="", library=None, templates=None, key_dates=()):
     wb = Workbook()
     ws = wb.active
@@ -1276,50 +1245,3 @@ def key_date_days(kd, limit=62):
         return []
     end = kd.end if kd.end and kd.end >= kd.date else kd.date
     return [kd.date + timedelta(days=i) for i in range(min((end - kd.date).days + 1, limit))]
-
-
-# --------------------------------------------------------------------------- cars
-
-
-def next_car_name(name):
-    """UCR-04 -> UCR-05 (keeps the zero padding); anything else gets " (next)"."""
-    m = re.match(r"^(.*?)(\d+)$", name or "")
-    return f"{m.group(1)}{int(m.group(2)) + 1:0{len(m.group(2))}d}" if m else f"{name} (next)"
-
-
-def new_car(tracker, name, structure=True, gates=True, dates=True, shift_days=0):
-    """Start the next car's tracker next to this one, optionally carrying over the sub-teams' assembly structure
-    (parts, sub-parts, templates and tags; no dates, people or progress), the gate library and templates, and the key
-    dates (moved by `shift_days`, not done). Returns the new folder."""
-    name = name.strip()
-    if not name or any(c in name for c in '\\/:*?"<>|'):
-        raise ValueError("Give the car a name without \\ / : * ? \" < > |.")
-    dest = tracker.folder.parent / name
-    if dest.exists():
-        raise ValueError(f"{dest} already exists.")
-    shift = lambda d: d + timedelta(days=shift_days) if d else None
-    kds = [KeyDate(shift(k.date), k.event, k.type, list(k.people), False, shift(k.internal), shift(k.end), k.track, k.competition,
-                   k.notes) for k in tracker.key_dates] if dates else []
-    (dest / SUBTEAM_DIR).mkdir(parents=True)
-    try:
-        create_master(dest / MASTER, name, tracker.library if gates else None, tracker.templates if gates else None, kds)
-        shared = tracker.templates if gates else {DEFAULT_TEMPLATE: standard_template()}
-        for team in tracker.subteams:
-            path = dest / SUBTEAM_DIR / team.path.name
-            create_subteam_file(path, DEFAULT_GATES)
-            new = load_subteam(path, shared)
-            if gates:
-                new.templates = {n: Template(t.name, t.designation, list(t.gates), dict(t.after), dict(t.due_before))
-                                 for n, t in team.templates.items()}
-                new.library = [GateDef(g.name, g.code, g.designation, g.description) for g in team.library]
-                new.default_template = team.default_template
-            if structure:
-                for p in team.parts:
-                    keep = p.template if p.template in new.available() else ""
-                    new.parts.append(Part(p.name, parent=p.parent, tags=list(p.tags), template=keep))
-            save_subteam(new)
-    except Exception:
-        import shutil
-        shutil.rmtree(dest, ignore_errors=True)
-        raise
-    return dest

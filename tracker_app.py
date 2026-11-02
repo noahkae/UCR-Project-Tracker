@@ -195,7 +195,7 @@ def lateness(passed, due):
 
 
 class TrackerApp:
-    def __init__(self, page, folder, on_change_folder=None, on_open_folder=None):
+    def __init__(self, page, folder, on_change_folder=None):
         self.page = page
         self.folder = Path(folder)
         self.tracker = None
@@ -206,13 +206,12 @@ class TrackerApp:
         self.part_table, self.part_query, self.part_widths, self.notes_width = None, "", [], None
         self.part_tag = None  # tag filter on the subteam page
         self.subview = load_config().get("subview", "List")
-        self.on_open_folder = on_open_folder
-        self.car_button = ft.TextButton("", on_click=lambda e: self.cars_dialog(), tooltip="Switch car, or start the next one",
-                                        style=ft.ButtonStyle(padding=ft.Padding.symmetric(horizontal=4)))
+        self.car_label = ft.Text("", size=12, weight=ft.FontWeight.W_700, color=ft.Colors.PRIMARY)
         page.on_resize = self.on_resize
         self.rail = ft.NavigationRail(
             label_type=ft.NavigationRailLabelType.ALL, min_width=96, group_alignment=-0.9, scrollable=True, on_change=self.on_nav,
-            leading=ft.Container(ft.Column([ft.Image(src="icon.png", width=36, height=36, border_radius=5), self.car_button],
+            leading=ft.Container(ft.Column([ft.Image(src="icon.png", width=36, height=36, border_radius=5),
+                                            ft.Container(self.car_label, padding=ft.Padding.symmetric(vertical=8))],
                                            spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER), padding=ft.Padding.only(top=8)),
             trailing=ft.Container(ft.Column([
                 ft.IconButton(ft.Icons.REFRESH, tooltip="Reload files", on_click=lambda e: self.reload()),
@@ -241,7 +240,7 @@ class TrackerApp:
             ft.NavigationRailDestination(icon=ft.Text(emoji(t.name), size=22), label=_short(t.name))
             for t in self.tracker.subteams
         ]
-        self.car_button.content = ft.Text(self.tracker.car, size=12, weight=ft.FontWeight.W_700)
+        self.car_label.value = self.tracker.car
         if self.view not in FIXED_VIEWS and self.view not in [t.name for t in self.tracker.subteams]:
             self.view = "overview"
         self.show(self.view)
@@ -450,10 +449,8 @@ class TrackerApp:
                         subtitle=ft.Text(f"{fmt(d)} · {sub_}"), dense=True, on_click=lambda e, v=view: self.show(v))
             for d, icon, title, sub_, view in upcoming
         ]
-        new_team = ft.OutlinedButton("New sub-team", icon=ft.Icons.GROUP_ADD_OUTLINED, on_click=lambda e: self.new_subteam_dialog())
         content = ft.Column([
-            ft.Row([heading(f"{self.tracker.car} overview", sub), new_team], alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                   vertical_alignment=ft.CrossAxisAlignment.START),
+            heading(f"{self.tracker.car} overview", sub),
             ft.ResponsiveRow(cards, spacing=12, run_spacing=12),
             ft.ResponsiveRow([
                 ft.Container(section(f"Needs attention ({len(attention)})",
@@ -1474,80 +1471,6 @@ class TrackerApp:
                                            horizontal_alignment=ft.CrossAxisAlignment.STRETCH), width=460),
             actions=actions))
 
-    # ---- cars and sub-teams
-
-    def cars_dialog(self):
-        cars = core.cars_near(self.folder)
-        tiles = [ft.ListTile(leading=ft.Icon(ft.Icons.CHECK if path == self.folder else ft.Icons.DIRECTIONS_CAR_OUTLINED),
-                             title=ft.Text(name, weight=ft.FontWeight.W_600 if path == self.folder else None), subtitle=ft.Text(str(path)),
-                             on_click=self.open_car(path)) for name, path in cars]
-        self.page.show_dialog(ft.AlertDialog(
-            title=ft.Text("Cars"),
-            content=ft.Container(ft.Column(tiles, tight=True, scroll=ft.ScrollMode.AUTO), width=560),
-            actions=[ft.TextButton("New car…", icon=ft.Icons.ADD, on_click=lambda e: self.new_car_dialog()),
-                     ft.TextButton("Close", on_click=lambda e: self.page.pop_dialog())]))
-
-    def open_car(self, path):
-        def handler(e):
-            self.page.pop_dialog()
-            if path != self.folder and self.on_open_folder:
-                self.on_open_folder(path)
-        return handler
-
-    def new_car_dialog(self):
-        self.page.pop_dialog()
-        name = ft.TextField(label="Car", value=core.next_car_name(self.tracker.car), autofocus=True)
-        structure = ft.Switch(label="Sub-teams' assembly structure (parts, sub-parts, templates, tags)", value=True)
-        gates = ft.Switch(label="Gate library and templates", value=True)
-        dates = ft.Switch(label="Key dates (not marked done)", value=True)
-        shift = ft.Switch(label="…moved one year later", value=True)
-        error = ft.Text(color=ft.Colors.ERROR, size=13, visible=False)
-
-        def create(e):
-            try:
-                dest = core.new_car(self.tracker, name.value, structure.value, gates.value, dates.value, 364 if shift.value else 0)
-            except (ValueError, OSError, core.SaveError) as err:
-                error.value, error.visible = str(err), True
-                error.update()
-                return
-            self.page.pop_dialog()
-            if self.on_open_folder:
-                self.on_open_folder(dest)
-        self.page.show_dialog(ft.AlertDialog(
-            title=ft.Text(f"Start the next car after {self.tracker.car}"),
-            content=ft.Container(ft.Column([
-                name, ft.Text(f"Creates a new tracker folder next to this one ({self.folder.parent}). Carry over:", size=13,
-                              color=ft.Colors.ON_SURFACE_VARIANT),
-                structure, gates, dates, ft.Container(shift, padding=ft.Padding.only(left=24)),
-                ft.Text("Owners, dates and progress always start fresh.", size=12, color=ft.Colors.ON_SURFACE_VARIANT), error,
-            ], tight=True, spacing=10), width=560),
-            actions=[ft.TextButton("Cancel", on_click=lambda e: self.page.pop_dialog()), ft.FilledButton("Create", on_click=create)]))
-
-    def new_subteam_dialog(self):
-        tr = self.tracker
-        available = core.all_templates(tr)
-        name = ft.TextField(label="Sub-team name", autofocus=True, hint_text="e.g. Cooling")
-        tpl = ft.Dropdown(label="Starts with gate template", value=core.DEFAULT_TEMPLATE if core.DEFAULT_TEMPLATE in available else next(iter(available), ""),
-                          options=[ft.DropdownOption(key=n, text=f"{n}  ({t.designation})") for n, (t, _) in available.items()])
-        error = ft.Text(color=ft.Colors.ERROR, size=13, visible=False)
-
-        def create(e):
-            try:
-                core.create_subteam(tr, name.value, tpl.value or "")
-            except (ValueError, OSError, core.SaveError) as err:
-                error.value, error.visible = str(err) if not isinstance(err, OSError) else "Edit failed.", True
-                error.update()
-                return
-            self.page.pop_dialog()
-            self.reload()
-            self.show(name.value.strip())
-        self.page.show_dialog(ft.AlertDialog(
-            title=ft.Text("New sub-team"),
-            content=ft.Container(ft.Column([name, tpl, ft.Text(
-                "Creates Subteams/<name>.xlsx. On SharePoint, give its lead Edit access to that file.", size=12,
-                color=ft.Colors.ON_SURFACE_VARIANT), error], tight=True, spacing=12), width=460),
-            actions=[ft.TextButton("Cancel", on_click=lambda e: self.page.pop_dialog()), ft.FilledButton("Create", on_click=create)]))
-
     def commit(self, team, change, dialog=True):
         """Apply a change to a subteam and save it; on failure undo it (and reload if someone else saved first)."""
         backup = copy.deepcopy((team.parts, team.actions, team.reviews, team.templates, team.library, team.default_template))
@@ -1796,8 +1719,7 @@ def main(page: ft.Page, folder=None, start=None):
         cfg["folder"] = str(path)
         save_config(cfg)
         page.controls.clear()
-        app = TrackerApp(page, path, on_change_folder=lambda: setup_screen(page, open_tracker, on_cancel=lambda: open_tracker(path)),
-                         on_open_folder=open_tracker)
+        app = TrackerApp(page, path, on_change_folder=lambda: setup_screen(page, open_tracker, on_cancel=lambda: open_tracker(path)))
         if start:
             app.show(start)
 
