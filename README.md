@@ -165,7 +165,6 @@ undoes the change and reloads.
 * **Gates** (under ⚙ Settings, or *Gate templates* on a subteam page) lists every **gate template** (the workflows parts move through) and the **gate library** they're
   built from: each gate's code, name, designation (*General* or a sub-team), description, and **Used in** (how many
   templates and items use it). Click a template or gate to see or edit it.
-* **The car** (e.g. *UCR-04*) shows under the logo.
 * **↻** reloads the files (do this after a lead says they've updated). **⚙ Settings** (bottom of
   the rail) holds the **Night mode** switch, the **Tracker folder** and **Gates**.
 

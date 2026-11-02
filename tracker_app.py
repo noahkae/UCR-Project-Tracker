@@ -206,13 +206,11 @@ class TrackerApp:
         self.part_table, self.part_query, self.part_widths, self.notes_width = None, "", [], None
         self.part_tag = None  # tag filter on the subteam page
         self.subview = load_config().get("subview", "List")
-        self.car_label = ft.Text("", size=12, weight=ft.FontWeight.W_700, color=ft.Colors.PRIMARY)
         page.on_resize = self.on_resize
         self.rail = ft.NavigationRail(
             label_type=ft.NavigationRailLabelType.ALL, min_width=96, group_alignment=-0.9, scrollable=True, on_change=self.on_nav,
-            leading=ft.Container(ft.Column([ft.Image(src="icon.png", width=36, height=36, border_radius=5),
-                                            ft.Container(self.car_label, padding=ft.Padding.symmetric(vertical=8))],
-                                           spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER), padding=ft.Padding.only(top=8)),
+            leading=ft.Container(ft.Image(src="icon.png", width=36, height=36, border_radius=5),
+                                 padding=ft.Padding.only(top=8, bottom=12)),
             trailing=ft.Container(ft.Column([
                 ft.IconButton(ft.Icons.REFRESH, tooltip="Reload files", on_click=lambda e: self.reload()),
                 self.settings_menu(on_change_folder),
@@ -240,7 +238,6 @@ class TrackerApp:
             ft.NavigationRailDestination(icon=ft.Text(emoji(t.name), size=22), label=_short(t.name))
             for t in self.tracker.subteams
         ]
-        self.car_label.value = self.tracker.car
         if self.view not in FIXED_VIEWS and self.view not in [t.name for t in self.tracker.subteams]:
             self.view = "overview"
         self.show(self.view)
@@ -450,7 +447,7 @@ class TrackerApp:
             for d, icon, title, sub_, view in upcoming
         ]
         content = ft.Column([
-            heading(f"{self.tracker.car} overview", sub),
+            heading("Project overview", sub),
             ft.ResponsiveRow(cards, spacing=12, run_spacing=12),
             ft.ResponsiveRow([
                 ft.Container(section(f"Needs attention ({len(attention)})",
