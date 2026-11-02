@@ -51,6 +51,7 @@ REVIEW_SHEET = "Design Reviews"
 TEMPLATE_SHEET = "Gate Templates"
 LIBRARY_SHEET = "Gate Library"
 SETTINGS_SHEET = "Settings"
+RENAME_SHEET = "Renames"  # general gates/templates renamed in the app, so files not saved then catch up on load
 LEGACY_GATE_SHEET = "Gates"  # one template per subteam, from the version before templates
 FIXED_COLS = ["Part", "Parent", "Owner", "Assignees", "Tags", "Template", "Current Gate", "Flag", "Notes"]
 # Older files have a subset of these, in this order; they're read by header name and upgraded on save.
@@ -263,6 +264,7 @@ class Tracker:
     car: str = ""
     library: list = field(default_factory=list)  # general gates (GateDef)
     templates: dict = field(default_factory=dict)  # general templates, by name
+    renames: dict = field(default_factory=lambda: {"gate": {}, "template": {}})  # old name -> new, from the Renames sheet
 
 
 def standard_template(gates=DEFAULT_GATES, name=DEFAULT_TEMPLATE, designation=GENERAL):
@@ -430,16 +432,22 @@ def progress(part, team):
     return sum(cleared(part, g) for g in gates), len(gates)
 
 
-def conflicts(part, team):
-    """Gates marked done or in progress while a gate before them isn't done (or off)."""
+def conflict_gates(part, team):
+    """{gate: the gates before it that aren't done} for gates marked done or in progress out of order."""
     t = template_of(team, part)
-    out = []
+    out = {}
     for g in t.gates:
         if g in part.passed or (g in part.started and not cleared(part, g)):
             missing = [a for a in ancestors(t, g) if not cleared(part, a)]
             if missing:
-                out.append(f"{g} is {'done' if g in part.passed else 'in progress'} but {', '.join(missing)} isn't done yet.")
+                out[g] = missing
     return out
+
+
+def conflicts(part, team):
+    """Gates marked done or in progress while a gate before them isn't done (or off), as messages."""
+    return [f"{g} is {'done' if g in part.passed else 'in progress'} but {', '.join(missing)} isn't done yet."
+            for g, missing in conflict_gates(part, team).items()]
 
 
 def rule_warnings(part, team, key_dates):
@@ -616,6 +624,18 @@ def update_template(template, gates, after=None, due_before=None):
     template.after = {g: [a for a in after.get(g, []) if a in names[:i]] for i, g in enumerate(names)}
     template.due_before = {g: due_before.get(g, "") for g in names if due_before.get(g)}
     template.gates = names
+
+
+def record_rename(renames, old, new):
+    """Note that `old` is now called `new` in a {old: new} map, following earlier renames through (A->B, B->C = A->C)."""
+    for k, v in list(renames.items()):
+        if v == old:
+            renames[k] = new
+    renames.pop(new, None)  # renamed back: the new name is a name in use again
+    if old != new:
+        renames[old] = new
+    for k in [k for k, v in renames.items() if k == v]:
+        del renames[k]
 
 
 def remap_parts(team, template_name, gates):
@@ -826,21 +846,33 @@ def load(folder):
         templates, library = {DEFAULT_TEMPLATE: standard_template()}, standard_library()
     tracker = Tracker(folder, key_dates, [], is_writable(master), master.stat().st_mtime,
                       _settings(wb).get("Car") or folder.name, library, templates)
+    for r in _rows(wb, RENAME_SHEET, 3):
+        kind, old, new = _text(r[0]).casefold(), _text(r[1]), _text(r[2])
+        if kind in tracker.renames and old and new:
+            tracker.renames[kind][old] = new
     for p in sorted((folder / SUBTEAM_DIR).glob("*.xlsx")):
         if not p.name.startswith("~$"):
-            team = load_subteam(p, templates, library)
+            team = load_subteam(p, templates, library, tracker.renames)
             if team:
                 tracker.subteams.append(team)
     return tracker
 
 
-def load_subteam(path, shared=None, general_library=()):
+def load_subteam(path, shared=None, general_library=(), renames=None):
+    """`renames` ({"gate": {old: new}, "template": {old: new}}, from the master) catches this file up with general gates
+    and templates renamed while it wasn't saved: a gate column is renamed when no template here still uses the old name."""
     wb = load_workbook(path, data_only=True)
     if PLAN_SHEET not in wb.sheetnames:
         return None
     ws = wb[PLAN_SHEET]
     fixed, columns = _plan_layout(ws)
+    renames = renames or {}
     renamed = dict(zip(OLD_DEFAULT_GATES, DEFAULT_GATES)) if columns == OLD_DEFAULT_GATES else {}
+    own = _read_templates(wb, path.stem) if TEMPLATE_SHEET in wb.sheetnames else {}
+    in_use = {g for t in list((shared or {}).values()) + list(own.values()) for g in t.gates}
+    for old, new in renames.get("gate", {}).items():
+        if old in columns and new not in columns and old not in in_use:
+            renamed.setdefault(old, new)
     columns = [renamed.get(g, g) for g in columns]
     team = Subteam(path.stem, path, [], is_writable(path), path.stat().st_mtime, shared=dict(shared or {}), columns=columns)
     if TEMPLATE_SHEET in wb.sheetnames:
@@ -851,6 +883,12 @@ def load_subteam(path, shared=None, general_library=()):
         team.templates = {team.name: standard_template(columns, team.name, team.name)}  # its gates, in order
     team.library = _read_library(wb, team.name)
     team.default_template = _settings(wb).get("Default template", "")
+    template_renames = renames.get("template", {})
+    if team.default_template in template_renames and team.default_template not in team.available():
+        team.default_template = template_renames[team.default_template]
+    elif not team.default_template and not team.templates and DEFAULT_TEMPLATE not in team.shared \
+            and template_renames.get(DEFAULT_TEMPLATE) in team.shared:
+        team.default_template = template_renames[DEFAULT_TEMPLATE]  # it followed Standard, which was renamed
     n = len(fixed)
     for row in ws.iter_rows(min_row=2, max_col=n + len(columns), values_only=True):
         cell = lambda col: _text(row[fixed.index(col)]) if col in fixed else ""
@@ -865,6 +903,8 @@ def load_subteam(path, shared=None, general_library=()):
             skipped={g for g, v in cells.items() if _text(v).upper() in (SKIP, "NA", "SKIP", "OFF")},
             template=cell("Template"),
         ))
+        if team.parts[-1].template in template_renames and team.parts[-1].template not in team.available():
+            team.parts[-1].template = template_renames[team.parts[-1].template]
     team.actions = [Action(str(r[0]).strip(), _text(r[1]), _text(r[2]), _date(r[3]), _text(r[4]), _date(r[5]))
                     for r in _rows(wb, ACTION_SHEET, len(ACTION_COLS))]
     team.reviews = [Review(_text(r[0]), _text(r[1]), _date(r[2]), _text(r[3]), _text(r[4]), _text(r[5]))
@@ -931,9 +971,11 @@ def _settings(wb):
 
 def _passed_from_current(part, team, renamed):
     """Gates done before the app logged them: everything a listed current gate comes after (or every gate, for Done).
-    This is how files edited by hand, or made by older versions, say which gates are done."""
+    This is how files edited by hand, or made by older versions, say which gates are done. A gate the Gate Log has as
+    in progress proves nothing: it can be in progress out of order (a conflict), with the gates before it not done."""
     t = template_of(team, part)
     listed = [renamed.get(g.strip(), g.strip()) for g in re.split(r"[,+]", part.current) if g.strip()]
+    listed = [g for g in listed if g not in part.started]
     before = t.gates if DONE in listed else [a for g in listed if g in t.gates for a in ancestors(t, g)]
     for g in before:
         if g not in part.passed and g not in part.skipped:
@@ -1044,6 +1086,14 @@ def _write_templates(wb, templates, designation):
     ws = _sheet(wb, TEMPLATE_SHEET, TEMPLATE_COLS, (26, 16, 30, 50, 28))
     _write_rows(ws, [[t.name, t.designation or designation, g, ", ".join(t.after.get(g, [])), t.due_before.get(g)]
                      for t in templates.values() for g in t.gates], len(TEMPLATE_COLS), set())
+
+
+def _write_renames(wb, renames):
+    if not any(renames.values()) and RENAME_SHEET not in wb.sheetnames:
+        return
+    ws = _sheet(wb, RENAME_SHEET, ["Kind", "Old name", "New name"], (12, 36, 36),
+                "Written by the tracker app when a general gate or template is renamed. Do not edit.")
+    _write_rows(ws, [[kind.title(), old, new] for kind, m in renames.items() for old, new in m.items()], 3, set())
 
 
 def _write_library(wb, library):
@@ -1204,6 +1254,7 @@ def save_master_gates(tracker):
     wb = load_workbook(path)
     _write_library(wb, tracker.library)
     _write_templates(wb, tracker.templates, GENERAL)
+    _write_renames(wb, tracker.renames)
     _write_settings(wb, {**_settings(wb), "Car": tracker.car})
     _save_atomic(wb, path)
     tracker.master_mtime = path.stat().st_mtime
@@ -1213,6 +1264,9 @@ def write_rollup(tracker, today=None):
     """Regenerate Master.xlsx > All Parts and All Actions from every subteam file."""
     path = tracker.folder / MASTER
     ensure_can_save(path)  # regenerated from scratch, so a newer master isn't a conflict
+    # ...but if someone else saved the master since we loaded it, keep the old mtime, so our next key-date or gate
+    # save still sees their change as a conflict instead of overwriting it
+    unchanged = abs(path.stat().st_mtime - tracker.master_mtime) <= 1e-6
     wb = load_workbook(path)
     stamp = f"Generated by the tracker app {datetime.now():%Y-%m-%d %H:%M}. Don't edit it here."
     sheets = [
@@ -1236,7 +1290,8 @@ def write_rollup(tracker, today=None):
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = f"A1:{get_column_letter(len(cols))}{max(ws.max_row, 2)}"
     _save_atomic(wb, path)
-    tracker.master_mtime = path.stat().st_mtime
+    if unchanged:
+        tracker.master_mtime = path.stat().st_mtime
 
 
 def key_date_days(kd, limit=62):

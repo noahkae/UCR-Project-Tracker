@@ -296,7 +296,8 @@ Leads can also edit their file directly in Excel (desktop or browser). Each subt
 * **Settings**: the sub-team's default template.
 
 Edit templates and the library in the app rather than by hand. The master has the same *Gate Templates* and *Gate Library*
-sheets for the general ones, a *Settings* sheet with the car name, and **Key Dates**:
+sheets for the general ones, a *Settings* sheet with the car name, a *Renames* sheet (the app notes general gates and
+templates renamed there, so sub-team files that weren't saved at the time catch up when they're next opened), and **Key Dates**:
 `Date | Event | Type | People | Done | Internal deadline | End date | Track | Competition | Notes`.
 
 The **Plan** sheet looks like this:

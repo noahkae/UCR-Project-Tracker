@@ -321,9 +321,10 @@ def footer(fig, left_text, page, pages):
 # --------------------------------------------------------------------------- main
 
 
-def export(folder, out, only=None, car="UCR-04", start=None, end=None, today=None):
+def export(folder, out, only=None, car=None, start=None, end=None, today=None):
     today = today or date.today()
     tracker = core.load(folder)
+    car = car or tracker.car  # the name in Master > Settings (or the folder name)
     only = {s.casefold() for s in only} if only else None
     rows = build_rows(tracker, only)
     pages = paginate(rows)
@@ -360,7 +361,7 @@ def main():
     ap.add_argument("--folder", help="the synced Project Tracker folder (default: the one the app last used)")
     ap.add_argument("--out", help="PDF to write (default: Downloads/Gantt <date>.pdf)")
     ap.add_argument("--subteams", nargs="+", help="only these subteams")
-    ap.add_argument("--car", default="UCR-04", help="car name for the title (default UCR-04)")
+    ap.add_argument("--car", help="car name for the title (default: the one in the tracker's master file)")
     ap.add_argument("--from", dest="start", type=date.fromisoformat, help="first date shown, yyyy-mm-dd")
     ap.add_argument("--to", dest="end", type=date.fromisoformat, help="last date shown, yyyy-mm-dd")
     ap.add_argument("--no-open", action="store_true", help="don't open the PDF afterwards")

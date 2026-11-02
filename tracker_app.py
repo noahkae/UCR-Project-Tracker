@@ -183,6 +183,11 @@ def tag_chip(tag):
                         border_radius=8, padding=ft.Padding.symmetric(horizontal=7, vertical=1))
 
 
+def index_of(items, item):
+    """Position of this very object. list.index() compares dataclass fields, so it finds the first identical row instead."""
+    return next(i for i, x in enumerate(items) if x is item)
+
+
 def plural(n, word):
     return f"{n} {word}{'' if n == 1 else 's'}"
 
@@ -331,7 +336,7 @@ class TrackerApp:
     # ---- shared list tiles
 
     def part_tile(self, team, part, today, show_team=True):
-        index = team.parts.index(part)
+        index = index_of(team.parts, part)
         sub = f"{core.current_gate(part, team)} due {fmt(core.due_date(part, team))}"
         sub = (f"{team.name} · " if show_team else "") + sub + (f" · {part.owner}" if part.owner else "") + (f"\n{part.notes}" if part.notes else "")
         return ft.ListTile(
@@ -343,7 +348,7 @@ class TrackerApp:
         )
 
     def action_tile(self, team, action, today, show_team=True):
-        index = team.actions.index(action)
+        index = index_of(team.actions, action)
         st = core.action_status(action, today)
         bits = ([team.name] if show_team else []) + [action.part or "General", action.owner or "no owner", f"due {fmt(action.due)}"]
         if action.source:
@@ -367,7 +372,7 @@ class TrackerApp:
         mine = any(core.is_me(n, self.me) for n in kd.people)
         target = kd.date if kd.type in core.PERIOD_TYPES else core.key_date_target(kd)
         label = "Done" if kd.done else (st if st in ("Held", "Now") else countdown(target, today))
-        index = self.tracker.key_dates.index(kd)
+        index = index_of(self.tracker.key_dates, kd)
         return ft.ListTile(
             leading=ft.Icon(TYPE_ICONS.get(kd.type, ft.Icons.EVENT),
                             color=ft.Colors.ERROR if st == "Late" else (ft.Colors.OUTLINE if st in ("Done", "Held") else ft.Colors.ON_SURFACE_VARIANT)),
@@ -429,8 +434,8 @@ class TrackerApp:
             ))
         for kd in self.tracker.key_dates:
             if core.key_date_needs_attention(kd, today):
-                attention.append((kd.date, self.key_date_tile(kd, today)))
-            elif kd.date and today <= kd.date <= soon and not kd.done:
+                attention.append((kd.date or core.key_date_target(kd) or date.max, self.key_date_tile(kd, today)))
+            elif kd.date and kd.date <= soon and (kd.end or kd.date) >= today and not kd.done:  # incl. ones on now
                 upcoming.append((kd.date, TYPE_ICONS.get(kd.type, ft.Icons.EVENT), kd.event,
                                  kd.type + (f" · {', '.join(kd.people)}" if kd.people else ""), "keydates"))
         upcoming.sort(key=lambda u: u[0])
@@ -1159,9 +1164,10 @@ class TrackerApp:
             target = tpl or core.Template(new_name, designation)
 
             def apply(teams):
+                for t in teams:  # pin each sub-team's default first, so a new or renamed template can't quietly take over
+                    t.default_template = t.default_template or t.default
                 core.update_template(target, pairs, after, due)
                 if old_name and old_name != new_name:
-                    del store[old_name]
                     for t in teams:
                         for p in t.parts:
                             if p.template == old_name:
@@ -1169,7 +1175,16 @@ class TrackerApp:
                         if t.default_template == old_name:
                             t.default_template = new_name
                 target.name = new_name
+                items = [(new_name, target) if n == old_name else (n, x) for n, x in store.items()]  # keeps its place
+                store.clear()
+                store.update(items)
                 store[new_name] = target
+                if owner is None:  # sub-team files that aren't saved now catch up when they're next loaded
+                    if old_name and old_name != new_name:
+                        core.record_rename(tr.renames["template"], old_name, new_name)
+                    for old, new in pairs:
+                        if old and old != new:
+                            core.record_rename(tr.renames["gate"], old, new)
                 for t in teams:
                     t.shared = dict(tr.templates)
                     core.remap_parts(t, new_name, pairs)
@@ -1368,14 +1383,14 @@ class TrackerApp:
         return out
 
     def grid_row(self, team, p, tpl, today):
-        idx = team.parts.index(p)
+        idx = index_of(team.parts, p)
         kids = core.children(team, p)
         label = [ft.Text(p.name, weight=None if p.parent else ft.FontWeight.W_600, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)]
         if kids and core.is_done(p, team) and core.open_gates(p, team):
             label.append(pill("Done: all sub-assemblies", "Done"))
         name = ft.Container(ft.Row([ft.Container(width=20 if p.parent else 0)] + label, spacing=6, tight=True), width=280,
                             on_click=lambda e: self.edit_part(team, idx), ink=True, tooltip=p.key)
-        clash = {c.split(" is ")[0] for c in core.conflicts(p, team)}
+        clash = set(core.conflict_gates(p, team))
         return ft.Row([name] + [self.grid_cell(team, p, idx, g, g in clash, today) for g in tpl.gates], spacing=6,
                       vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
@@ -1496,7 +1511,7 @@ class TrackerApp:
         can_edit = self.tracker.master_writable
         show_past = load_config().get("show_past", False)
         tiles = [self.key_date_tile(kd, today) for kd in sorted(self.tracker.key_dates, key=lambda k: k.date or date.max)
-                 if show_past or not (kd.date and kd.date < today) or core.key_date_status(kd, today) == "Late"]
+                 if show_past or not (kd.date and (kd.end or kd.date) < today) or core.key_date_status(kd, today) == "Late"]
 
         def toggle_past(e):
             cfg = load_config()
