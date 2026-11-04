@@ -142,16 +142,19 @@ undoes the change and reloads.
 * **My work**: pick your name once (it's remembered) to see **the parts you own or work on, your open actions, and the key
   dates you're responsible for**, with anything late at the top. Your parts' upcoming design reviews are listed with your
   key dates, in date order. Key dates you're named on carry a **You** tag everywhere in the app.
-* **Subteam tabs** (left rail) have three views (switch at the top right; your choice is remembered):
-  * **List**: the parts, sorted with problems first. The dots show each gate of the part's template: filled = done,
-    amber = in progress, ringed = ready to start (several at once when gates run in parallel), hollow grey = off,
-    faint = waiting. ⚠ marks a part with a conflict or a date that breaks a gate rule (hover to see which). Under the name
-    are its **tags**; under the owner, anyone else working on it. Filter by text or click a **tag** chip;
+* **Subteam tabs** (left rail) have three views (switch at the top right; your choice is remembered,
+  and new users start on **Grid**):
   * **Grid**: every gate's date at a glance. Pick a gate template at the top (with how many parts follow it); each
     assembly is a row, with an arrow to fold out its sub-assemblies (or *Expand all*). Each cell is that gate's due date:
     green ✓ = done, red = late, amber = due within 7 days, a progress icon = in progress, grey *off* = not needed, · = no
     date. A red outline means out of order (in progress or done before a gate it comes after: a *conflict*). Hover a
-    cell for when it was done and how late; **click a cell** to set its state or open the part's dates;
+    cell for when it was done and how late. **Click a cell** for a small menu beside it: the gate's **status** (Not
+    started / In progress / Done / Off) above a **calendar** for its due date. Picking either saves straight away;
+    *Clear date* removes the date and *Details…* opens the part;
+  * **List**: the parts, sorted with problems first. The dots show each gate of the part's template: filled = done,
+    amber = in progress, ringed = ready to start (several at once when gates run in parallel), hollow grey = off,
+    faint = waiting. ⚠ marks a part with a conflict or a date that breaks a gate rule (hover to see which). Under the name
+    are its **tags**; under the owner, anyone else working on it. Filter by text or click a **tag** chip;
   * **Design reviews**: a row per assembly with **DR1 Concept / DR2 Intermediate / DR3 Final**. Click a cell to set the
     date, outcome and presenter. Upcoming reviews show in the owners' *My work*, the overview and the calendar;
   * its **actions**, open ones first;

@@ -27,7 +27,7 @@ ASSETS = Path(__file__).resolve().parent / "assets"
 LOOK_AHEAD_DAYS = 14
 FIXED_VIEWS = ["overview", "mywork", "calendar", "keydates", "gates"]
 RAIL_VIEWS = FIXED_VIEWS[:4]  # the rail's own destinations; Gates opens from the settings menu
-SUBVIEWS = ["List", "Grid", "Design reviews"]
+SUBVIEWS = ["Grid", "List", "Design reviews"]  # the first is the default
 SUBTEAM_EMOJI = {  # matched against the start of the subteam's file name
     "aero": "🪽", "suspension": "🛞", "chassis": "🏎️", "powertrain": "🔋",
     "electrical": "⚡", "driverless": "🤖",
@@ -216,7 +216,7 @@ class TrackerApp:
         self.grid_need, self.grid_fill = None, True  # width the grid's columns need; whether they stretch to fill the card
         self.part_table, self.part_query, self.part_widths, self.notes_width = None, "", [], None
         self.part_tag = None  # tag filter on the subteam page
-        self.subview = load_config().get("subview", "List")
+        self.subview = load_config().get("subview", SUBVIEWS[0])
         page.on_resize = self.on_resize
         self.rail = ft.NavigationRail(
             label_type=ft.NavigationRailLabelType.ALL, min_width=96, group_alignment=-0.9, scrollable=True, on_change=self.on_nav,
@@ -308,7 +308,11 @@ class TrackerApp:
 
     def grid_slot(self, control, width):
         """A grid column: its share of the card's width when the columns fill it, else a fixed width."""
-        return ft.Container(control, expand=width) if self.grid_fill else ft.Container(control, width=width)
+        if self.grid_fill:
+            control.expand = width
+        else:
+            control.width = width
+        return control
 
     def settings_menu(self, on_change_folder):
         """Material settings menu at the foot of the rail: night mode, the tracker folder, and the Gates page."""
@@ -681,7 +685,7 @@ class TrackerApp:
         hit, total = core.on_time(team)
         sub = f"Gates passed on time: {hit} of {total}" if total else None
         if self.subview not in SUBVIEWS:
-            self.subview = "List"
+            self.subview = SUBVIEWS[0]
 
         def pick_view(e):
             self.subview = e.control.selected[0]
@@ -1518,19 +1522,92 @@ class TrackerApp:
             tip.append(f"Out of order: {', '.join(missing)} isn't done yet")
         body = ft.Row([ft.Text(label, size=13, color=fg, italic=italic, weight=ft.FontWeight.W_500, expand=True, max_lines=1)]
                       + ([icon] if icon else []), spacing=4)
-        box = ft.Container(body, height=30, bgcolor=bg, border_radius=6, alignment=ft.Alignment.CENTER_LEFT,
-                           padding=ft.Padding.symmetric(horizontal=8), tooltip="\n".join(tip),
-                           border=ft.Border.all(2, ft.Colors.ERROR) if missing else None)
-        if not team.writable:
-            return box
-        items = [ft.PopupMenuItem(content=x, checked=x == state, on_click=self.grid_set(team, idx, g, x)) for x in core.STATES]
-        items.append(ft.PopupMenuItem(content="Dates and details…", on_click=lambda e: self.edit_part(team, idx)))
-        return ft.ContextMenu(content=box, primary_items=items, secondary_items=items, primary_trigger=ft.ContextMenuTrigger.DOWN)
+        cell = ft.Container(body, height=30, bgcolor=bg, border_radius=6, alignment=ft.Alignment.CENTER_LEFT,
+                            padding=ft.Padding.symmetric(horizontal=8), tooltip="\n".join(tip),
+                            border=ft.Border.all(2, ft.Colors.ERROR) if missing else None)
+        if team.writable:
+            where = {}
+            cell.ink = True
+            cell.on_tap_down = lambda e: where.update(pos=e.global_position)
+            cell.on_click = lambda e: self.gate_editor(team, idx, g, state, due, done_on, where.get("pos"))
+        return cell
 
-    def grid_set(self, team, idx, gate, state):
-        def handler(e):
-            self.commit(team, lambda: core.set_gate_state(team.parts[idx], gate, state, date.today()), dialog=False)
-        return handler
+    def gate_editor(self, team, idx, g, state, due, done_on, pos=None):
+        """A small menu beside the clicked cell: the gate's status above a month calendar for its due date.
+        Each change saves straight away and closes it."""
+        p = team.parts[idx]
+        shown = (due or date.today()).replace(day=1)
+        month = ft.Column(spacing=2, tight=True)
+
+        def set_due(d):
+            def change():
+                p.dates[g] = d
+                if g in p.passed:  # keep "due when done" in step, for the on-time count
+                    p.passed[g] = (p.passed[g][0], d)
+            self.commit(team, change)
+
+        def set_state(e):
+            self.commit(team, lambda: core.set_gate_state(p, g, e.control.value, date.today()))
+
+        def details(e):
+            self.page.pop_dialog()
+            self.edit_part(team, idx)
+
+        def step(months):
+            def handler(e):
+                nonlocal shown
+                y, m = divmod(shown.month - 1 + months, 12)
+                shown = date(shown.year + y, m + 1, 1)
+                render()
+                month.update()
+            return handler
+
+        def render():
+            today = date.today()
+            first = shown - timedelta(days=shown.weekday())
+            head = ft.Row([ft.IconButton(ft.Icons.CHEVRON_LEFT, icon_size=18, on_click=step(-1), tooltip="Previous month"),
+                           ft.Text(f"{shown:%B %Y}", weight=ft.FontWeight.W_600, expand=True, text_align=ft.TextAlign.CENTER),
+                           ft.IconButton(ft.Icons.CHEVRON_RIGHT, icon_size=18, on_click=step(1), tooltip="Next month")], spacing=0)
+            names = ft.Row([ft.Text(n, size=11, width=32, text_align=ft.TextAlign.CENTER, color=ft.Colors.ON_SURFACE_VARIANT)
+                            for n in "MTWTFSS"], spacing=2)
+            weeks = []
+            for w in range(6):
+                days = [first + timedelta(days=w * 7 + i) for i in range(7)]
+                if w and days[0].month != shown.month:
+                    break
+                cells = []
+                for d in days:
+                    picked, inside = d == due, d.month == shown.month
+                    cells.append(ft.Container(
+                        ft.Text(str(d.day), size=12, color=ft.Colors.ON_PRIMARY if picked else (None if inside else ft.Colors.OUTLINE),
+                                weight=ft.FontWeight.W_700 if picked or d == today else None),
+                        width=32, height=32, border_radius=16, alignment=ft.Alignment.CENTER, ink=True,
+                        bgcolor=ft.Colors.PRIMARY if picked else None,
+                        border=ft.Border.all(1, ft.Colors.PRIMARY) if d == today and not picked else None,
+                        on_click=lambda e, d=d: set_due(d), tooltip=fmt(d)))
+                weeks.append(ft.Row(cells, spacing=2))
+            month.controls = [head, names] + weeks
+
+        render()
+        status = ft.Dropdown(label="Status", value=state, dense=True, width=252,
+                             options=[ft.DropdownOption(key=x, text=x) for x in core.STATES],
+                             on_select=set_state)
+        info = [ft.Text(g, weight=ft.FontWeight.W_600, max_lines=2), ft.Text(
+            (f"Due {fmt(due)}" if due else "No due date") + (f" · done {fmt(done_on)}" if done_on else ""),
+            size=12, color=ft.Colors.ON_SURFACE_VARIANT)]
+        actions = ft.Row([ft.TextButton("Clear date", on_click=lambda e: set_due(None), disabled=due is None),
+                          ft.TextButton("Details…", on_click=details)],
+                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
+        content = ft.Container(ft.Column(info + [status, month, actions], spacing=8, tight=True), width=252)
+        # open beside the click, like a menu, kept inside the window
+        w, h, inset = 284, 500, 8
+        width, height = (self.page.width or 1280) - 2 * inset, (self.page.height or 800) - 2 * inset
+        x, y = (pos.x, pos.y + 18) if pos else (width / 2, height / 3)
+        align = lambda at, room: max(-1.0, min(1.0, 2 * at / max(room, 1) - 1))
+        self.page.show_dialog(ft.AlertDialog(
+            content=content, content_padding=16, inset_padding=inset, elevation=3, bgcolor=ft.Colors.SURFACE_CONTAINER_HIGH,
+            shape=ft.RoundedRectangleBorder(radius=12), barrier_color=ft.Colors.with_opacity(0.08, ft.Colors.BLACK),
+            alignment=ft.Alignment(align(x - inset, width - w), align(y - inset, height - h))))
 
     # ---- design reviews view
 
