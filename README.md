@@ -147,9 +147,11 @@ undoes the change and reloads.
     amber = in progress, ringed = ready to start (several at once when gates run in parallel), hollow grey = off,
     faint = waiting. ⚠ marks a part with a conflict or a date that breaks a gate rule (hover to see which). Under the name
     are its **tags**; under the owner, anyone else working on it. Filter by text or click a **tag** chip;
-  * **Grid**: one grid per gate template, a row per assembly and sub-assembly, a box per gate (✓ done, ◐ in progress,
-    – off, empty = not started). **Right-click (or click) a box** to set it. A thick red border means late or out of order
-    (a gate done before the one it comes after: a *conflict*);
+  * **Grid**: every gate's date at a glance. Pick a gate template at the top (with how many parts follow it); each
+    assembly is a row, with an arrow to fold out its sub-assemblies (or *Expand all*). Each cell is that gate's due date:
+    green ✓ = done, red = late, amber = due within 7 days, a progress icon = in progress, grey *off* = not needed, · = no
+    date. A red outline means out of order (in progress or done before a gate it comes after: a *conflict*). Hover a
+    cell for when it was done and how late; **click a cell** to set its state or open the part's dates;
   * **Design reviews**: a row per assembly with **DR1 Concept / DR2 Intermediate / DR3 Final**. Click a cell to set the
     date, outcome and presenter. Upcoming reviews show in the owners' *My work*, the overview and the calendar;
   * its **actions**, open ones first;

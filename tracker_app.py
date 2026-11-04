@@ -173,9 +173,13 @@ def gate_dots(part, team):
     return ft.Row(dots, spacing=4)
 
 
-GRID_STATE = {  # state -> (symbol, background key) for the grid view
-    core.DONE_STATE: ("✓", "done"), core.IN_PROGRESS: ("◐", "progress"), core.OFF: ("–", "off"), core.NOT_STARTED: ("", "empty"),
-}
+GRID_ITEM_WIDTH, GRID_OWNER_WIDTH, GRID_LEAD = 260, 140, 36  # the date grid's fixed columns; gate columns fit their names
+
+
+def grid_gate_width(gate):
+    """Wide enough for "✓ 30 Sep" and an icon; long gate names wrap onto two lines in the header."""
+    longest = max((len(w) for w in gate.split()), default=0)
+    return max(104, min(150, int(max(longest, len(gate) / 2) * 8.2) + 24))
 
 
 def tag_chip(tag):
@@ -208,6 +212,8 @@ class TrackerApp:
         self.me = load_config().get("me", "")
         self.cal_month = date.today().replace(day=1)
         self.expanded = set()  # parts whose sub-parts are shown
+        self.grid_template = {}  # sub-team -> the template the grid shows
+        self.grid_need, self.grid_fill = None, True  # width the grid's columns need; whether they stretch to fill the card
         self.part_table, self.part_query, self.part_widths, self.notes_width = None, "", [], None
         self.part_tag = None  # tag filter on the subteam page
         self.subview = load_config().get("subview", "List")
@@ -293,6 +299,16 @@ class TrackerApp:
         # the parts table switches between "Notes fills the row" and "fixed widths + scroll" at narrow sizes
         if self.view not in FIXED_VIEWS and self.part_widths and (self.table_notes_width() is None) != (self.notes_width is None):
             self.show(self.view)
+        # the grid's columns stretch to fill the card, until the window is too narrow for them: then fixed widths + scroll
+        elif self.view not in FIXED_VIEWS and self.subview == "Grid" and self.grid_need and self.grid_fits() != self.grid_fill:
+            self.show(self.view)
+
+    def grid_fits(self):
+        return (self.page.width or 1280) - TABLE_CHROME >= self.grid_need
+
+    def grid_slot(self, control, width):
+        """A grid column: its share of the card's width when the columns fill it, else a fixed width."""
+        return ft.Container(control, expand=width) if self.grid_fill else ft.Container(control, width=width)
 
     def settings_menu(self, on_change_folder):
         """Material settings menu at the foot of the rail: night mode, the tracker folder, and the Gates page."""
@@ -1362,55 +1378,149 @@ class TrackerApp:
     # ---- grid view
 
     def grid_view(self, team, today):
-        """One grid per template in use: a row per assembly / sub-assembly, a box per gate. Right-click (or click) a box
-        to set Not started / In progress / Done / Off."""
+        """A date grid per template: a row per assembly (sub-assemblies fold under it), a column per gate, each cell the
+        gate's due date coloured by where it stands. Click a cell to change its state or open the part."""
         if not team.parts:
             return [section("Grid", empty("No parts yet." + (" Press + to add one." if team.writable else "")))]
-        nested = {id(c) for p in team.parts for c in core.children(team, p)}
-        ordered = [x for p in team.parts if id(p) not in nested for x in [p] + core.children(team, p)]
         groups = {}
-        for p in ordered:
+        for p in team.parts:
             groups.setdefault(core.template_of(team, p).name, []).append(p)
-        out = []
-        for name, parts in groups.items():
-            tpl = core.template_of(team, parts[0])
-            head = ft.Row([ft.Container(ft.Text("Part", weight=ft.FontWeight.W_600), width=280)] + [
-                ft.Container(ft.Text(core.code_of(self.tracker, g) or g[:6], size=12, weight=ft.FontWeight.W_600, text_align=ft.TextAlign.CENTER),
-                             width=64, tooltip=g, alignment=ft.Alignment.CENTER) for g in tpl.gates], spacing=6)
-            rows = [head] + [self.grid_row(team, p, tpl, today) for p in parts]
-            out.append(section(f"{name}  ·  {tpl.designation}", ft.Row([ft.Column(rows, spacing=4)], scroll=ft.ScrollMode.AUTO),
-                               ft.Text("Right-click a box to change it", size=12, color=ft.Colors.ON_SURFACE_VARIANT)))
-        return out
+        default = core.template_of(team, None).name
+        chosen = self.grid_template.get(team.name)
+        if chosen not in groups:
+            chosen = default if default in groups else next(iter(groups))
+        chips, box = ft.Container(), ft.Container()
 
-    def grid_row(self, team, p, tpl, today):
+        def render():
+            chips.content = ft.SegmentedButton(
+                selected=[chosen], show_selected_icon=False, on_change=lambda e: pick(e.control.selected[0])(e),
+                segments=[ft.Segment(value=n, label=ft.Text(f"{n}  ·  {len(ps)}")) for n, ps in groups.items()])
+            box.content = self.grid_table(team, core.template_of(team, groups[chosen][0]), groups[chosen], today, refresh)
+
+        def refresh():
+            render()
+            chips.update()
+            box.update()
+
+        def pick(name):
+            def handler(e):
+                nonlocal chosen
+                chosen = self.grid_template[team.name] = name
+                refresh()
+            return handler
+
+        def fold(open_all):
+            def handler(e):
+                keys = {p.key for p in groups[chosen] if core.children(team, p)}
+                self.expanded = (self.expanded | keys) if open_all else (self.expanded - keys)
+                refresh()
+            return handler
+
+        render()
+        toolbar = ft.Row([chips, ft.Row([ft.TextButton("Expand all", icon=ft.Icons.UNFOLD_MORE, on_click=fold(True)),
+                                         ft.TextButton("Collapse all", icon=ft.Icons.UNFOLD_LESS, on_click=fold(False))], spacing=0)],
+                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN, wrap=True)
+        hint = ft.Text("Click a date to change it" if team.writable else "View only", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
+        return [section("Grid", ft.Column([toolbar, box, self.grid_legend()], spacing=12), hint)]
+
+    def grid_legend(self):
+        def key(label, bg=None, fg=None, icon=None, border=None, italic=False):
+            body = [ft.Text(label, size=12, color=fg, italic=italic)] + ([ft.Icon(icon, size=13, color=fg)] if icon else [])
+            return ft.Container(ft.Row(body, spacing=4, tight=True), bgcolor=bg, border_radius=6, border=border,
+                                padding=ft.Padding.symmetric(horizontal=8, vertical=3))
+        late, soon, done = STATUS_COLOURS["Late"], STATUS_COLOURS["Due soon"], STATUS_COLOURS["On track"]
+        return ft.Row([
+            key("✓ Done", *done), key("Late", *late), key(f"Due within {core.DUE_SOON_DAYS} days", *soon),
+            key("In progress", ft.Colors.SECONDARY_CONTAINER, ft.Colors.ON_SECONDARY_CONTAINER, ft.Icons.TIMELAPSE),
+            key("Not started"), key("off", ft.Colors.SURFACE_CONTAINER_HIGHEST, ft.Colors.OUTLINE, italic=True),
+            key("· no date", fg=ft.Colors.OUTLINE), key("Out of order", border=ft.Border.all(2, ft.Colors.ERROR)),
+        ], wrap=True, spacing=6, run_spacing=6)
+
+    def grid_table(self, team, tpl, parts, today, refresh):
+        widths = [grid_gate_width(g) for g in tpl.gates]
+        self.grid_need = GRID_ITEM_WIDTH + GRID_OWNER_WIDTH + sum(widths) + 4 * (len(widths) + 1)
+        self.grid_fill = self.grid_fits()
+        bold = lambda t, w, tip=None: self.grid_slot(ft.Container(
+            ft.Text(t, weight=ft.FontWeight.W_600, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
+            tooltip=tip or t, padding=ft.Padding.symmetric(horizontal=6)), w)
+        head = ft.Container(ft.Row([bold("Part", GRID_ITEM_WIDTH), bold("Owner", GRID_OWNER_WIDTH)]
+                                   + [bold(g, w, f"{g} ({core.code_of(self.tracker, g)})" if core.code_of(self.tracker, g) else None)
+                                      for g, w in zip(tpl.gates, widths)], spacing=4, vertical_alignment=ft.CrossAxisAlignment.END),
+                            padding=ft.Padding.symmetric(vertical=10), border=ft.Border(bottom=ft.BorderSide(1, ft.Colors.OUTLINE_VARIANT)))
+        here = {id(p) for p in parts}
+        tops = [p for p in parts if not p.parent or not any(q.name == p.parent and not q.parent and id(q) in here for q in parts)]
+        rows = []
+        for p in tops:
+            kids = [k for k in core.children(team, p) if id(k) in here]
+            expanded = bool(kids) and p.key in self.expanded
+            rows.append(self.grid_row(team, p, tpl, widths, today, kids, expanded, refresh))
+            if expanded:
+                rows += [self.grid_row(team, k, tpl, widths, today, sub=True) for k in kids]
+        table = ft.Column([head] + rows, spacing=0)
+        return table if self.grid_fill else ft.Row([table], scroll=ft.ScrollMode.AUTO)
+
+    def grid_row(self, team, p, tpl, widths, today, kids=(), expanded=False, refresh=None, sub=False):
         idx = index_of(team.parts, p)
-        kids = core.children(team, p)
-        label = [ft.Text(p.name, weight=None if p.parent else ft.FontWeight.W_600, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)]
-        if kids and core.is_done(p, team) and core.open_gates(p, team):
-            label.append(pill("Done: all sub-assemblies", "Done"))
-        name = ft.Container(ft.Row([ft.Container(width=20 if p.parent else 0)] + label, spacing=6, tight=True), width=280,
-                            on_click=lambda e: self.edit_part(team, idx), ink=True, tooltip=p.key)
-        clash = set(core.conflict_gates(p, team))
-        return ft.Row([name] + [self.grid_cell(team, p, idx, g, g in clash, today) for g in tpl.gates], spacing=6,
-                      vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
-    def grid_cell(self, team, p, idx, g, clash, today):
+        def toggle(e):
+            self.expanded ^= {p.key}
+            refresh()
+        lead = ft.Container(width=GRID_LEAD * (2 if sub else 1))  # sub-parts indent one step further
+        if kids:
+            lead.content = ft.IconButton(ft.Icons.EXPAND_MORE if expanded else ft.Icons.CHEVRON_RIGHT, icon_size=18, on_click=toggle,
+                                         tooltip=("Hide " if expanded else "Show ") + plural(len(kids), "sub-part"),
+                                         style=ft.ButtonStyle(padding=ft.Padding.all(4)))
+        name = p.key if (p.parent and not sub) else p.name  # a sub-part whose assembly follows another template
+        item = ft.Container(ft.Row([lead, ft.Text(name, weight=None if sub else ft.FontWeight.W_600, max_lines=1,
+                                                  overflow=ft.TextOverflow.ELLIPSIS, expand=True)], spacing=2),
+                            height=36, on_click=lambda e: self.edit_part(team, idx), ink=True, border_radius=6,
+                            tooltip=p.key + (f"\n{p.notes}" if p.notes else ""))
+        people = p.owner + (f" +{len(p.assignees)}" if p.assignees else "") if p.owner else ", ".join(p.assignees)
+        owner = ft.Container(ft.Text(people or "—", max_lines=1, overflow=ft.TextOverflow.ELLIPSIS,
+                                     color=None if people else ft.Colors.OUTLINE),
+                             tooltip=", ".join(p.people()) or None, padding=ft.Padding.symmetric(horizontal=6))
+        clash = core.conflict_gates(p, team)
+        cells = [self.grid_slot(self.grid_cell(team, p, idx, g, clash.get(g), today), w) for g, w in zip(tpl.gates, widths)]
+        return ft.Container(ft.Row([self.grid_slot(item, GRID_ITEM_WIDTH), self.grid_slot(owner, GRID_OWNER_WIDTH)] + cells,
+                                   spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                            padding=ft.Padding.symmetric(vertical=3),
+                            bgcolor=ft.Colors.SURFACE_CONTAINER_LOW if sub else None,
+                            border=ft.Border(bottom=ft.BorderSide(1, ft.Colors.OUTLINE_VARIANT)))
+
+    def grid_cell(self, team, p, idx, g, missing, today):
+        """One gate: its due date (✓ once done), coloured late / due soon / done; off is greyed; in progress has an icon."""
+        if g not in core.template_of(team, p).gates:
+            return ft.Container()
         state = core.state_name(p, g)
-        symbol, kind = GRID_STATE[state]
         due = p.dates.get(g)
-        late = state in (core.NOT_STARTED, core.IN_PROGRESS) and due and due < today
-        bg = {"done": ft.Colors.ON_SURFACE, "progress": STATUS_COLOURS["Due soon"][0], "off": ft.Colors.SURFACE_CONTAINER_HIGHEST,
-              "empty": None}[kind]
-        fg = {"done": ft.Colors.SURFACE, "progress": STATUS_COLOURS["Due soon"][1]}.get(kind, ft.Colors.ON_SURFACE_VARIANT)
-        ready = core.gate_state(p, team, g) == "ready"
-        # thick red = late or out of order; light = ready to start (red is reserved for problems)
-        border = ft.Colors.ERROR if (late or clash) else (ft.Colors.ON_SURFACE_VARIANT if ready else ft.Colors.OUTLINE_VARIANT)
-        tip = f"{g}: {state}" + (f" · due {fmt(due)}" if due else "") + (
-            f" · done {fmt(p.passed[g][0])}" if g in p.passed and p.passed[g][0] else "") + (" · LATE" if late else "") + (
-            "\nConflict: an earlier gate isn't done" if clash else "")
-        box = ft.Container(ft.Text(symbol + ("!" if clash else ""), color=fg, weight=ft.FontWeight.W_700, text_align=ft.TextAlign.CENTER),
-                           width=64, height=30, bgcolor=bg, border_radius=6, border=ft.Border.all(2.5 if (late or clash) else (1.5 if ready else 1), border),
-                           alignment=ft.Alignment.CENTER, tooltip=tip)
+        done_on = p.passed[g][0] if g in p.passed else None
+        open_ = state in (core.NOT_STARTED, core.IN_PROGRESS)
+        status = core.date_status(due, today=today) if open_ else None
+        label, icon, italic = (f"{due:%d %b}" if due else "·"), None, False
+        bg, fg = None, ft.Colors.ON_SURFACE if due else ft.Colors.OUTLINE
+        if state == core.DONE_STATE:
+            bg, fg = STATUS_COLOURS["On track"]
+            label = "✓ " + (f"{(due or done_on):%d %b}" if (due or done_on) else "done")
+        elif state == core.OFF:
+            bg, fg, label, italic = ft.Colors.SURFACE_CONTAINER_HIGHEST, ft.Colors.OUTLINE, "off", True
+        elif status in ("Late", "Due soon"):
+            bg, fg = STATUS_COLOURS[status]
+        elif state == core.IN_PROGRESS:
+            bg, fg = ft.Colors.SECONDARY_CONTAINER, ft.Colors.ON_SECONDARY_CONTAINER
+        if state == core.IN_PROGRESS:
+            icon = ft.Icon(ft.Icons.TIMELAPSE, size=14, color=fg)
+        tip = [f"{g}: {state.lower()}" + (f", due {fmt(due)}" if due else ", no due date")]
+        if done_on:
+            tip.append(f"Done {fmt(done_on)}" + (f" ({lateness(done_on, due)})" if due else ""))
+        if status == "Late":
+            tip.append(f"Late by {plural((today - due).days, 'day')}")
+        if missing:
+            tip.append(f"Out of order: {', '.join(missing)} isn't done yet")
+        body = ft.Row([ft.Text(label, size=13, color=fg, italic=italic, weight=ft.FontWeight.W_500, expand=True, max_lines=1)]
+                      + ([icon] if icon else []), spacing=4)
+        box = ft.Container(body, height=30, bgcolor=bg, border_radius=6, alignment=ft.Alignment.CENTER_LEFT,
+                           padding=ft.Padding.symmetric(horizontal=8), tooltip="\n".join(tip),
+                           border=ft.Border.all(2, ft.Colors.ERROR) if missing else None)
         if not team.writable:
             return box
         items = [ft.PopupMenuItem(content=x, checked=x == state, on_click=self.grid_set(team, idx, g, x)) for x in core.STATES]
